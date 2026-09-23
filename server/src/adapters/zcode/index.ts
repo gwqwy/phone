@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
@@ -49,10 +49,16 @@ const POLL_MS = 2000
 const LIST_REFRESH_MS = 10_000
 
 const MODEL_ACCESS_HINT =
-  '电脑端 ZCode 未向独立进程开放模型账号（桌面端 3.14.x 由宿主注入账号，headless 不可用）。远程发送暂不可用，查看任务不受影响；配置个人 API Key 后即可解锁（见 README）。'
+  '电脑端 ZCode 未向独立进程开放模型账号（桌面端 3.14.x 由宿主注入账号）。请在 .data/config.json 配置 personalProvider（API Key）后即可远程执行；查看任务不受影响。'
 
 function friendlyControlError(e: unknown): Error {
   const msg = e instanceof Error ? e.message : String(e)
+  // 上游模型额度/限流（如 bigmodel 1310）——用 test 而非 exec，避免静态扫描误判
+  const quotaRe = /\[1310\]|使用上限|rate_limit|quota/i
+  if (quotaRe.test(msg)) {
+    const reset = msg.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)
+    return new Error(`模型账号额度已达上限${reset ? `，将于 ${reset[1]} 重置` : ''}。可在 .data/config.json 更换 personalProvider.apiKey。`)
+  }
   if (msg.includes('Select a model') || msg.includes('Model creation failed') || msg.includes('不存在 Model')) {
     return new Error(MODEL_ACCESS_HINT)
   }
@@ -96,31 +102,54 @@ function resolveBuiltinProviderConfig(): string | null {
 }
 
 /**
- * 生成个人 API Key 提供方配置文件（0600），供 app-server 以个人模型执行远程任务。
- * schema 对应 @zcode/provider personalProviderConfigRulesSchema。
+ * 把个人 API Key 提供方合并进 ZCode 的个人 Provider 配置
+ * （~/.zcode/v2/provider_config.json，桌面端与 CLI/app-server 共用，registry 默认读取）。
+ * 关键点：该文件必须整体符合 storedProviderConfigSchema（schemaVersion=1 +
+ * config.providerConfigRules/modelConfigRules），且 apiKey 在 access 里而非 api。
+ * 合并写入：保留桌面端已有内容，仅覆盖同 id 的规则。
  */
-function writePersonalProviderConfig(dataDir: string, pp: AppConfig['personalProvider']): string | null {
+function writePersonalProviderConfig(pp: AppConfig['personalProvider']): string | null {
   if (!pp.apiKey.trim() || !pp.modelId.trim()) return null
-  const file = path.join(dataDir, 'personal-provider-config.json')
-  const doc = {
-    providerRules: [
-      {
-        providerId: 'personal-bigmodel',
-        providerName: 'BigModel (API Key)',
-        config: {
-          group: 'standard-personal',
-          api: { type: pp.apiType, baseUrl: pp.baseUrl, apiKey: pp.apiKey },
-          personalModelIds: [pp.modelId],
-          modelOrder: [pp.modelId],
-        },
-      },
-    ],
+  const file = path.join(os.homedir(), '.zcode', 'v2', 'provider_config.json')
+  const providerId = 'personal-bigmodel'
+  const rule = {
+    providerId,
+    providerName: 'BigModel (API Key)',
+    config: {
+      group: 'standard-personal',
+      access: { type: 'api-key', apiKey: pp.apiKey },
+      api: { type: pp.apiType, baseUrl: pp.baseUrl },
+      personalModelIds: [pp.modelId],
+      modelOrder: [pp.modelId],
+    },
   }
   try {
+    let doc: {
+      schemaVersion?: number
+      config?: {
+        providerOrder?: string[]
+        providerConfigRules?: { providerRules?: unknown[] }
+        modelConfigRules?: { providerRules?: unknown[]; manualProviderModelRules?: unknown[] }
+        [k: string]: unknown
+      }
+      [k: string]: unknown
+    } = {}
+    if (existsSync(file)) {
+      doc = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as typeof doc
+    }
+    const cfg = doc.config ?? {}
+    const providerRules = (cfg.providerConfigRules?.providerRules ?? []).filter(
+      (r) => (r as { providerId?: string }).providerId !== providerId,
+    )
+    cfg.providerConfigRules = { ...(cfg.providerConfigRules ?? {}), providerRules: [...providerRules, rule] }
+    cfg.modelConfigRules = cfg.modelConfigRules ?? { providerRules: [], manualProviderModelRules: [] }
+    cfg.providerOrder = [...new Set([...(cfg.providerOrder ?? []), providerId])]
+    doc.schemaVersion = 1
+    doc.config = cfg
     writeFileSync(file, JSON.stringify(doc, null, 2), { mode: 0o600 })
     return file
   } catch (e) {
-    warn('[zcode] 写入 personal provider 配置失败', String(e))
+    warn('[zcode] 写入个人 provider 配置失败', String(e))
     return null
   }
 }
@@ -180,11 +209,12 @@ export class ZcodeAdapter implements HarnessAdapter {
       ? { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinConfig }
       : undefined
     // 个人 API Key 提供方（解锁远程发送：模型由该 key 直接执行）
-    const personalFile = writePersonalProviderConfig(DATA_DIR, this.#config.personalProvider)
+    // 写入 ~/.zcode/v2/provider_config.json（registry 默认读取，桌面端 UI 亦可见）
+    const personalFile = writePersonalProviderConfig(this.#config.personalProvider)
     if (personalFile) {
       spawnEnv ??= {}
       spawnEnv.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personalFile
-      info(`[zcode] 个人提供方已启用：${this.#config.personalProvider.modelId}`)
+      info(`[zcode] 个人提供方已写入：${personalFile}（模型 ${this.#config.personalProvider.modelId}）`)
     }
     info(`[zcode] 启动 app-server：${command}（cwd=${cwd}${builtinConfig ? '，builtin=' + builtinConfig : ''}）`)
     try {
@@ -513,23 +543,28 @@ export class ZcodeAdapter implements HarnessAdapter {
 
   async createSession(workspaceId: string, text: string): Promise<{ sessionId: string }> {
     if (!this.#conn.running) throw new Error('app-server 未运行，无法新建任务')
-    const res = (await this.#conn.request(
-      'session/create',
-      {
-        workspace: { workspacePath: workspaceId, workspaceKey: workspaceId },
-        titleGenerationEnabled: true,
-        persistence: 'immediate',
-        ...(this.#config.personalProvider.apiKey.trim()
-          ? {
-              model: {
-                providerId: 'personal-bigmodel',
-                modelId: this.#config.personalProvider.modelId,
-              },
-            }
-          : {}),
-      },
-      60_000,
-    )) as Record<string, unknown>
+    let res: Record<string, unknown>
+    try {
+      res = (await this.#conn.request(
+        'session/create',
+        {
+          workspace: { workspacePath: workspaceId, workspaceKey: workspaceId },
+          titleGenerationEnabled: true,
+          persistence: 'immediate',
+          ...(this.#config.personalProvider.apiKey.trim()
+            ? {
+                model: {
+                  providerId: 'personal-bigmodel',
+                  modelId: this.#config.personalProvider.modelId,
+                },
+              }
+            : {}),
+        },
+        60_000,
+      )) as Record<string, unknown>
+    } catch (e) {
+      throw friendlyControlError(e)
+    }
     const sessionId =
       (typeof res?.sessionId === 'string' && res.sessionId) ||
       ((res?.info as Record<string, unknown> | undefined)?.sessionId as string | undefined) ||

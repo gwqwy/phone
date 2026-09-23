@@ -56,6 +56,20 @@ async function main(): Promise<void> {
     console.log(`[run] account overlay 失败: ${String(e).slice(0, 200)}`)
   }
 
+  // 先探测 registry 里哪些模型可选（区分 provider 未注册 / 模型 id 不对）
+  for (const sel of [
+    { providerId: 'personal-bigmodel', modelId: 'GLM-5.3' },
+    { providerId: 'deepseek', modelId: 'deepseek-chat' },
+    { providerId: 'deepseek', modelId: 'deepseek-reasoner' },
+  ]) {
+    try {
+      const r = await conn.request('provider/testModelConnectivity', { workspace: { workspacePath: 'E:\\文件\\编程文件\\zcode phone\\.data\\test-ws', workspaceKey: 'ws' }, selection: sel }, 20_000)
+      console.log(`[run] connectivity ${sel.providerId}/${sel.modelId} → ${JSON.stringify(r).slice(0, 120)}`)
+    } catch (e) {
+      console.log(`[run] connectivity ${sel.providerId}/${sel.modelId} 失败: ${String(e).slice(0, 140)}`)
+    }
+  }
+
   const created = (await conn.request(
     'session/create',
     {
