@@ -1,0 +1,17 @@
+{
+  "name": "zcode-phone",
+  "version": "0.1.0",
+  "private": true,
+  "description": "手机远控编码智能体：ZCode / DeepSeek Harness 等 harness 的统一移动端控制台",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix client run dev:h5",
+    "build:web": "npm --prefix client run build:h5",
+    "start": "npm --prefix server run start",
+    "test": "npm --prefix server run test"
+  }
+}

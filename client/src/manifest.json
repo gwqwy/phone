@@ -1,0 +1,16 @@
+{
+  "name": "ZCode Phone",
+  "appid": "",
+  "description": "手机远控编码智能体",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "vueVersion": "3",
+  "locale": "zh-CN",
+  "h5": {
+    "title": "ZCode Phone",
+    "router": {
+      "mode": "hash",
+      "base": "/"
+    }
+  }
+}

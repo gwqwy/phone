@@ -1,0 +1,39 @@
+/* 页面根容器：所有页面 <view class="zp-page" :class="themeClass"> */
+.zp-page {
+  /* 深色（默认） */
+  --zp-bg: #101014;
+  --zp-bg-elev: #1b1b21;
+  --zp-bg-elev2: #24242b;
+  --zp-border: #2c2c34;
+  --zp-text: #e8e8ec;
+  --zp-text-dim: #8a8a94;
+  --zp-text-faint: #5c5c66;
+  --zp-accent: #4c8dff;
+  --zp-ok: #3fbf7f;
+  --zp-ok-bg: #1d3a2c;
+  --zp-warn: #e8b339;
+  --zp-err: #e5534b;
+  --zp-user-bubble: #263349;
+
+  min-height: 100vh;
+  background-color: var(--zp-bg);
+  color: var(--zp-text);
+  box-sizing: border-box;
+}
+
+/* 浅色 */
+.zp-page.theme-light {
+  --zp-bg: #f3f3f6;
+  --zp-bg-elev: #ffffff;
+  --zp-bg-elev2: #eeeff2;
+  --zp-border: #dcdce2;
+  --zp-text: #1a1a1e;
+  --zp-text-dim: #6b6b74;
+  --zp-text-faint: #9a9aa2;
+  --zp-accent: #2f6fe0;
+  --zp-ok: #1fa15e;
+  --zp-ok-bg: #dcf3e6;
+  --zp-warn: #c08a1a;
+  --zp-err: #d5423a;
+  --zp-user-bubble: #dbe7ff;
+}

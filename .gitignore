@@ -1,0 +1,8 @@
+node_modules/
+.data/
+.reference/
+*.log
+server/dist/
+client/dist/
+client/unpackage/
+.DS_Store
