@@ -103,7 +103,7 @@ const adapterStateText = computed(() => {
 const relayHint = computed(() => {
   const a = activeAdapter.value
   if (a && a.id === 'zcode-relay' && !a.ready) {
-    return '在电脑端 ZCode 打开「远程控制」即可自动配对'
+    return '需在电脑端 ZCode 应用内开启「远程控制」并保持开启；请勿用浏览器打开该配对链接（会占用连接），链接过期后需在桌面端重新生成'
   }
   return ''
 })
