@@ -541,8 +541,25 @@ export class ZcodeAdapter implements HarnessAdapter {
     }
   }
 
+  /** 远程任务使用的模型选择：优先 config.taskModel，回退个人 bigmodel provider */
+  #taskModelSelection(): { providerId: string; modelId: string; options?: { reasoningLevel: string } } | undefined {
+    const tm = this.#config.taskModel
+    if (tm?.modelId?.trim()) {
+      return {
+        providerId: tm.providerId?.trim() || 'personal-bigmodel',
+        modelId: tm.modelId.trim(),
+        ...(tm.reasoningLevel?.trim() ? { options: { reasoningLevel: tm.reasoningLevel.trim() } } : {}),
+      }
+    }
+    if (this.#config.personalProvider.apiKey.trim()) {
+      return { providerId: 'personal-bigmodel', modelId: this.#config.personalProvider.modelId }
+    }
+    return undefined
+  }
+
   async createSession(workspaceId: string, text: string): Promise<{ sessionId: string }> {
     if (!this.#conn.running) throw new Error('app-server 未运行，无法新建任务')
+    const model = this.#taskModelSelection()
     let res: Record<string, unknown>
     try {
       res = (await this.#conn.request(
@@ -551,14 +568,7 @@ export class ZcodeAdapter implements HarnessAdapter {
           workspace: { workspacePath: workspaceId, workspaceKey: workspaceId },
           titleGenerationEnabled: true,
           persistence: 'immediate',
-          ...(this.#config.personalProvider.apiKey.trim()
-            ? {
-                model: {
-                  providerId: 'personal-bigmodel',
-                  modelId: this.#config.personalProvider.modelId,
-                },
-              }
-            : {}),
+          ...(model ? { model } : {}),
         },
         60_000,
       )) as Record<string, unknown>

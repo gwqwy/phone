@@ -74,6 +74,14 @@
 | 2026-09-23 | 复连后 `auth_ack + pair_status="matched"`（桌面腿在线）✅ |
 | 2026-09-23 | matched 后裸发顶层 `bootstrap-request` → `WRONG_PARAM` + 断链；已修正为 data.payload 内层 JSON 形态 |
 | 2026-09-23 | 桌面腿随「远程控制」页面开关浮动（matched↔waiting）；官方页面在线会挤占同一 sid（KICKED 根因） |
+| 2026-09-23 | **bootstrap-response 成功到达** ✅：`{result:{desktopAppVersion, initialViewState, activeTaskId, activeWorkspaceKey, …}}` —— 内层确认就是 **zcode_type JSON 信封**；桌面端还会主动推送状态更新。数据面即 `bootstrap/platform-request` 通道，无需 VSCode RPC 栈。（clientHello NDJSON 无响应，非必要） |
+
+## 9. 下一步（zcode-relay 数据面收尾）
+
+1. 解析 `bootstrap-response.result`（initialViewState：工作区/任务/活跃会话）
+2. 探测 `platform-request` 的可用 method（任务列表刷新、会话消息读取、发送输入）
+3. 映射到统一协议（TaskSummary/TimelineEvent），与 zcode 适配器共用手机端 UI
+4. `v4command`（sendText/stop/resolveInteraction）作为写路径
 
 ## 6. 落地形态（建议）
 

@@ -28,6 +28,13 @@ export interface AppConfig {
     apiType: string
     modelId: string
   }
+  /** 远程任务使用的模型（可指向桌面端已配置的 provider，如 deepseek） */
+  taskModel: {
+    providerId: string
+    modelId: string
+    /** 部分模型（如 deepseek-v4-pro）必须显式指定推理强度 */
+    reasoningLevel: string
+  }
 }
 
 const DEFAULTS: AppConfig = {
@@ -39,6 +46,7 @@ const DEFAULTS: AppConfig = {
   zcodeCwd: '',
   relayPairingUrl: '',
   personalProvider: { apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/anthropic', apiType: 'anthropic-messages', modelId: 'GLM-5.3' },
+  taskModel: { providerId: '', modelId: '', reasoningLevel: '' },
 }
 
 export function loadConfig(): AppConfig {
