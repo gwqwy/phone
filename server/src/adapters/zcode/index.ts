@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
@@ -6,6 +6,7 @@ import { ZcodeDbReader } from './db.ts'
 import { mapStatus, rowsToEvents, type V4Row } from './map.ts'
 import type { HarnessAdapter, HistoryRange, StreamCallback } from '../../core/harness.ts'
 import type { AppConfig } from '../../config.ts'
+import { DATA_DIR } from '../../config.ts'
 import type { CapabilitySet, StreamFrame, TaskSummary, TimelineEvent, Workspace } from '../../protocol.ts'
 import { info, warn } from '../../log.ts'
 
@@ -95,6 +96,36 @@ function resolveBuiltinProviderConfig(): string | null {
 }
 
 /**
+ * 生成个人 API Key 提供方配置文件（0600），供 app-server 以个人模型执行远程任务。
+ * schema 对应 @zcode/provider personalProviderConfigRulesSchema。
+ */
+function writePersonalProviderConfig(dataDir: string, pp: AppConfig['personalProvider']): string | null {
+  if (!pp.apiKey.trim() || !pp.modelId.trim()) return null
+  const file = path.join(dataDir, 'personal-provider-config.json')
+  const doc = {
+    providerRules: [
+      {
+        providerId: 'personal-bigmodel',
+        providerName: 'BigModel (API Key)',
+        config: {
+          group: 'standard-personal',
+          api: { type: pp.apiType, baseUrl: pp.baseUrl, apiKey: pp.apiKey },
+          personalModelIds: [pp.modelId],
+          modelOrder: [pp.modelId],
+        },
+      },
+    ],
+  }
+  try {
+    writeFileSync(file, JSON.stringify(doc, null, 2), { mode: 0o600 })
+    return file
+  } catch (e) {
+    warn('[zcode] 写入 personal provider 配置失败', String(e))
+    return null
+  }
+}
+
+/**
  * ZCode 适配器。
  * 数据面：
  *  - 会话列表/状态：app-server RPC `session/list`（与本机桌面端共用 ~/.zcode 存储）
@@ -148,6 +179,13 @@ export class ZcodeAdapter implements HarnessAdapter {
     const spawnEnv: Record<string, string> | undefined = builtinConfig
       ? { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinConfig }
       : undefined
+    // 个人 API Key 提供方（解锁远程发送：模型由该 key 直接执行）
+    const personalFile = writePersonalProviderConfig(DATA_DIR, this.#config.personalProvider)
+    if (personalFile) {
+      spawnEnv ??= {}
+      spawnEnv.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personalFile
+      info(`[zcode] 个人提供方已启用：${this.#config.personalProvider.modelId}`)
+    }
     info(`[zcode] 启动 app-server：${command}（cwd=${cwd}${builtinConfig ? '，builtin=' + builtinConfig : ''}）`)
     try {
       await this.#conn.start(command, ['app-server', '--stdio'], cwd, (line) => {
@@ -477,6 +515,14 @@ export class ZcodeAdapter implements HarnessAdapter {
         workspace: { workspacePath: workspaceId, workspaceKey: workspaceId },
         titleGenerationEnabled: true,
         persistence: 'immediate',
+        ...(this.#config.personalProvider.apiKey.trim()
+          ? {
+              model: {
+                providerId: 'personal-bigmodel',
+                modelId: this.#config.personalProvider.modelId,
+              },
+            }
+          : {}),
       },
       60_000,
     )) as Record<string, unknown>

@@ -20,6 +20,14 @@ export interface AppConfig {
   zcodeCwd: string
   /** 官方中继配对链接（桌面端「远程控制」生成）；配置后启用 zcode-relay 适配器 */
   relayPairingUrl: string
+  /** 个人 API Key 提供方：配置后 app-server 可用该模型执行远程任务（解锁远程发送） */
+  personalProvider: {
+    apiKey: string
+    baseUrl: string
+    /** anthropic-messages | openai 等，默认 anthropic-messages（bigmodel 开放平台兼容端点） */
+    apiType: string
+    modelId: string
+  }
 }
 
 const DEFAULTS: AppConfig = {
@@ -30,6 +38,7 @@ const DEFAULTS: AppConfig = {
   zcodeCommand: '',
   zcodeCwd: '',
   relayPairingUrl: '',
+  personalProvider: { apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/anthropic', apiType: 'anthropic-messages', modelId: 'GLM-5.3' },
 }
 
 export function loadConfig(): AppConfig {

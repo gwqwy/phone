@@ -100,6 +100,13 @@ async function scrollToBottom(): Promise<void> {
   if (last) scrollInto.value = `ev-${last.id}`
 }
 
+// 精简视图：默认隐藏思考与一般工具行（编辑/终端/审批/正文保留）
+const compact = ref(true)
+const visibleEvents = computed(() => {
+  if (!compact.value) return events.value
+  return events.value.filter((e) => e.kind !== 'think' && e.kind !== 'tool' && e.kind !== 'patch' && e.kind !== 'step' && e.kind !== 'system')
+})
+
 async function send(): Promise<void> {
   const text = input.value.trim()
   if (!text || sending.value || !canSend.value) return
@@ -136,6 +143,7 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
   <view class="zp-page" :class="themeClass">
     <NavBar :title="title" :back="true" @back="() => uni.navigateBack()">
       <template #right>
+        <text class="panel-btn" :class="{ on: !compact }" @tap="compact = !compact">{{ compact ? '详' : '简' }}</text>
         <text v-if="running && canStop" class="stop-btn" @tap="stopTask">停止</text>
         <text class="panel-btn" @tap="panelVisible = true">▤</text>
       </template>
@@ -146,7 +154,7 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
       <view v-else-if="loadError" class="placeholder"><text>{{ loadError }}</text></view>
       <view v-else-if="!events.length" class="placeholder"><text>暂无消息</text></view>
       <view v-else class="timeline-inner">
-        <view v-for="ev in events" :id="`ev-${ev.id}`" :key="ev.id">
+        <view v-for="ev in visibleEvents" :id="`ev-${ev.id}`" :key="ev.id">
           <TimelineRow :ev="ev" @resolve="(o) => resolve(ev.id, o)" />
         </view>
         <view v-if="running" class="running-hint"><text>● 正在工作中…</text></view>
@@ -176,8 +184,14 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
 <style scoped>
 .panel-btn {
   color: var(--zp-text-dim);
-  font-size: 18px;
+  font-size: 14px;
   padding: 4px 8px;
+  border: 1px solid var(--zp-border);
+  border-radius: 8px;
+}
+.panel-btn.on {
+  color: var(--zp-accent);
+  border-color: var(--zp-accent);
 }
 .stop-btn {
   color: var(--zp-err);
