@@ -184,6 +184,22 @@ async function handleReq(
       return ok(await adapter.review(p.sessionId))
     }
 
+    case 'models.list': {
+      if (!requireAdapter(adapter, fail)) return
+      if (typeof adapter?.listModels !== 'function') return ok({ models: [], current: null })
+      return ok(await adapter.listModels(typeof p.sessionId === 'string' ? p.sessionId : undefined))
+    }
+
+    case 'model.set': {
+      if (!requireAdapter(adapter, fail)) return
+      if (typeof adapter?.setSessionModel !== 'function') return fail('not-implemented', '该 harness 不支持切换模型')
+      if (typeof p.sessionId !== 'string' || typeof p.providerId !== 'string' || typeof p.modelId !== 'string')
+        return fail('bad-request', '参数不全')
+      const reasoningLevel = typeof p.reasoningLevel === 'string' && p.reasoningLevel ? p.reasoningLevel : undefined
+      await adapter.setSessionModel(p.sessionId, p.providerId, p.modelId, reasoningLevel)
+      return ok({ changed: true })
+    }
+
     case 'send': {
       if (!requireAdapter(adapter, fail)) return
       if (typeof adapter?.sendText !== 'function') return fail('not-implemented', '该 harness 不支持发送')

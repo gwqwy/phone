@@ -4,6 +4,7 @@ import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../components/NavBar.vue'
 import TimelineRow from '../../components/TimelineRow.vue'
 import SidePanel from '../../components/SidePanel.vue'
+import ModelPicker from '../../components/ModelPicker.vue'
 import { api, conn, httpGet, ensureHttpBase } from '../../api/client'
 import { index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
@@ -17,6 +18,20 @@ const input = ref('')
 const sending = ref(false)
 const scrollInto = ref('')
 const panelVisible = ref(false)
+const modelPickerVisible = ref(false)
+const currentModel = ref('')
+
+/** 读取会话当前模型（用于导航栏展示） */
+async function loadCurrentModel(): Promise<void> {
+  try {
+    const res = await api.request<{ current: { providerId: string; modelId: string } | null }>('models.list', {
+      sessionId: sessionId.value,
+    })
+    currentModel.value = res.current?.modelId ?? ''
+  } catch {
+    currentModel.value = ''
+  }
+}
 
 const task = computed(() => index.tasks.find((t) => t.id === sessionId.value))
 const title = computed(() => task.value?.alias || task.value?.title || '任务会话')
@@ -45,6 +60,7 @@ onLoad((options) => {
   })
   // 进入会话即清除未读标记
   void api.request('meta.set', { sessionId: sessionId.value, patch: { unread: false } }).catch(() => {})
+  void loadCurrentModel()
 })
 
 async function checkAuth(): Promise<void> {
@@ -203,6 +219,9 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
   <view class="zp-page" :class="themeClass">
     <NavBar :title="title" :back="true" @back="() => uni.navigateBack()">
       <template #right>
+        <text class="model-btn" @tap="modelPickerVisible = true">
+          {{ currentModel ? currentModel : '模型' }}
+        </text>
         <text class="panel-btn" :class="{ on: !compact }" @tap="compact = !compact">{{ compact ? '详' : '简' }}</text>
         <text v-if="running && canStop" class="stop-btn" @tap="stopTask">停止</text>
         <text class="panel-btn" @tap="panelVisible = true">▤</text>
@@ -258,10 +277,27 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
       </view>
     </view>
     <SidePanel :visible="panelVisible" :session-id="sessionId" @close="panelVisible = false" />
+    <ModelPicker
+      :visible="modelPickerVisible"
+      :session-id="sessionId"
+      @close="modelPickerVisible = false"
+      @changed="loadCurrentModel"
+    />
   </view>
 </template>
 
 <style scoped>
+.model-btn {
+  color: var(--zp-accent);
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--zp-accent);
+  border-radius: 8px;
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .panel-btn {
   color: var(--zp-text-dim);
   font-size: 14px;

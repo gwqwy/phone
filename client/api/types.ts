@@ -56,6 +56,23 @@ export interface CapabilitySet {
   review: boolean
   terminal: boolean
   createTask: boolean
+  /** 支持列出/切换会话模型 */
+  models: boolean
+}
+
+/** 模型选择器数据（与 server 的 ModelCatalog 对应） */
+export interface ModelOption {
+  providerId: string
+  modelId: string
+  label?: string
+  reasoningLevels?: string[]
+  reasoningLevel?: string
+  note?: string
+}
+
+export interface ModelCatalog {
+  models: ModelOption[]
+  current?: { providerId: string; modelId: string; reasoningLevel?: string } | null
 }
 
 export interface AdapterInfo {

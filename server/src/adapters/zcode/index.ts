@@ -4,7 +4,7 @@ import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
 import { ZcodeDbReader } from './db.ts'
 import { mapStatus, rowsToEvents, type V4Row } from './map.ts'
-import type { HarnessAdapter, HistoryRange, StreamCallback } from '../../core/harness.ts'
+import type { HarnessAdapter, HistoryRange, ModelCatalog, StreamCallback } from '../../core/harness.ts'
 import type { AppConfig } from '../../config.ts'
 import { DATA_DIR } from '../../config.ts'
 import type { CapabilitySet, StreamFrame, TaskSummary, TimelineEvent, Workspace } from '../../protocol.ts'
@@ -640,6 +640,137 @@ export class ZcodeAdapter implements HarnessAdapter {
   async review(sessionId: string): Promise<{ additions: number; deletions: number; files: string[] }> {
     if (this.#db.available) return this.#db.review(sessionId)
     return { additions: 0, deletions: 0, files: [] }
+  }
+
+  /** 可选模型清单：个人 provider（provider_config.json） + config 里配置的模型 */
+  async listModels(sessionId?: string): Promise<ModelCatalog> {
+    const models: ModelCatalog['models'] = []
+    const seen = new Set<string>()
+    const add = (o: ModelCatalog['models'][number]): void => {
+      const key = `${o.providerId}/${o.modelId}`
+      if (seen.has(key)) return
+      seen.add(key)
+      models.push(o)
+    }
+
+    // 1) ~/.zcode/v2/provider_config.json 的个人 provider（API Key 可用）
+    const personalFile = path.join(os.homedir(), '.zcode', 'v2', 'provider_config.json')
+    try {
+      const doc = JSON.parse(readFileSync(personalFile, 'utf8').replace(/^\uFEFF/, '')) as {
+        config?: { providerConfigRules?: { providerRules?: Record<string, unknown>[] } }
+      }
+      for (const rule of doc.config?.providerConfigRules?.providerRules ?? []) {
+        const providerId = String(rule.providerId ?? '')
+        const cfg = (rule.config ?? {}) as { personalModelIds?: string[]; modelOrder?: string[] }
+        if (!providerId) continue
+        const ids = [...new Set([...(cfg.modelOrder ?? []), ...(cfg.personalModelIds ?? [])])]
+        const label = String(rule.providerName ?? providerId)
+        if (ids.length) {
+          for (const id of ids) add({ providerId, modelId: id, label: `${label} · ${id}`, reasoningLevels: ['off', 'low', 'medium', 'high'], reasoningLevel: 'high' })
+        } else if (providerId === 'deepseek') {
+          // 模板 provider（模型来自内置模板）
+          add({ providerId, modelId: 'deepseek-v4-pro', label: `${label} · deepseek-v4-pro`, reasoningLevels: ['off', 'low', 'medium', 'high'], reasoningLevel: 'high' })
+        }
+      }
+    } catch {
+      // 无个人配置
+    }
+
+    // 2) config.json 里配置的个人 bigmodel provider / taskModel
+    const pp = this.#config.personalProvider
+    if (pp.apiKey.trim() && pp.modelId.trim()) {
+      add({ providerId: 'personal-bigmodel', modelId: pp.modelId, label: `BigModel · ${pp.modelId}`, note: 'API Key' })
+    }
+    const tm = this.#config.taskModel
+    if (tm?.modelId?.trim()) {
+      add({
+        providerId: tm.providerId?.trim() || 'personal-bigmodel',
+        modelId: tm.modelId.trim(),
+        ...(tm.reasoningLevel ? { reasoningLevel: tm.reasoningLevel } : {}),
+      })
+    }
+
+    // 3) 内置账号 provider（桌面端账号，独立进程执行受限，仅作展示提示）
+    const builtin = resolveBuiltinProviderConfig()
+    if (builtin) {
+      try {
+        const doc = JSON.parse(readFileSync(builtin, 'utf8').replace(/^\uFEFF/, '')) as { providerRules?: Record<string, unknown>[] }
+        for (const rule of doc.providerRules ?? []) {
+          const providerId = String(rule.providerId ?? '')
+          if (!providerId.startsWith('account:bigmodel')) continue
+          const cfg = (rule.config ?? {}) as { builtinModelIds?: string[] }
+          for (const id of cfg.builtinModelIds ?? []) {
+            add({ providerId, modelId: id, label: `账号 · ${id}`, note: '需桌面端在线' })
+          }
+        }
+      } catch {
+        // 内置目录不可读
+      }
+    }
+
+    // 当前会话正在使用的模型
+    let current: ModelCatalog['current'] = null
+    if (sessionId) {
+      try {
+        const res = (await this.#conn.request('session/list', { sessionIds: [sessionId] }, 15_000)) as {
+          sessions?: { modelId?: string; providerId?: string }[]
+        }
+        const s = res?.sessions?.[0]
+        if (s?.modelId) current = { providerId: s.providerId ?? '', modelId: s.modelId }
+      } catch {
+        // 查询失败则不显示当前值
+      }
+      current ??= (() => {
+        const sel = this.#taskModelSelection()
+        return sel ? { providerId: sel.providerId, modelId: sel.modelId } : null
+      })()
+    }
+    return { models, current }
+  }
+
+  /** 切换会话模型（同步更新 config.taskModel，后续新建任务沿用） */
+  async setSessionModel(sessionId: string, providerId: string, modelId: string, reasoningLevel?: string): Promise<void> {
+    if (!this.#conn.running) throw new Error('app-server 未运行')
+    const params = {
+      sessionId,
+      model: { providerId, modelId, ...(reasoningLevel ? { options: { reasoningLevel } } : {}) },
+      persistAsWorkspaceLastUsed: true,
+    }
+    let applied = false
+    if (sessionId) {
+      try {
+        await this.#conn.request('session/setModel', params, 30_000)
+        applied = true
+      } catch (e) {
+        const msg = String(e)
+        // 会话未在本进程激活（桌面端持有的会话）：先物化再重试
+        if (msg.includes('-32004') || msg.toLowerCase().includes('not active')) {
+          try {
+            await this.#conn.request('session/resume', { sessionId }, 60_000)
+            await this.#conn.request('session/setModel', params, 30_000)
+            applied = true
+          } catch {
+            // 桌面端持有的活跃会话无法由本进程接管，降级为“设为默认模型”
+          }
+        } else {
+          throw friendlyControlError(e)
+        }
+      }
+    }
+    // 记为默认任务模型（无论会话是否切换成功，后续新建任务都用它）
+    this.#config.taskModel = { providerId, modelId, reasoningLevel: reasoningLevel ?? '' }
+    try {
+      const cfgFile = path.join(DATA_DIR, 'config.json')
+      const doc = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^\uFEFF/, '')) as Record<string, unknown>
+      doc.taskModel = this.#config.taskModel
+      writeFileSync(cfgFile, JSON.stringify(doc, null, 2))
+    } catch (e) {
+      warn('[zcode] 保存默认模型失败', String(e))
+    }
+    this.#scheduleListRefresh()
+    if (!applied) {
+      throw new Error(`已设为默认模型（${modelId}）；该会话正被桌面端使用，切换需在桌面端操作。`)
+    }
   }
 
   async stop(): Promise<void> {

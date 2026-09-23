@@ -2,6 +2,23 @@ import type { CapabilitySet, StreamFrame, TaskSummary, TimelineEvent, Workspace 
 
 export type StreamCallback = (frame: StreamFrame) => void
 
+/** 可选模型目录（UI 的模型选择器数据源） */
+export interface ModelOption {
+  providerId: string
+  modelId: string
+  /** 展示名（缺省用 modelId） */
+  label?: string
+  /** 需要显式推理强度时给出可选值 */
+  reasoningLevels?: string[]
+  reasoningLevel?: string
+  note?: string
+}
+
+export interface ModelCatalog {
+  models: ModelOption[]
+  current?: { providerId: string; modelId: string; reasoningLevel?: string } | null
+}
+
 export interface HistoryRange {
   before?: string
   limit?: number
@@ -35,6 +52,10 @@ export interface HarnessAdapter {
   createSession?(workspaceId: string, text: string): Promise<{ sessionId: string }>
   /** 审查面板：该会话的代码变更汇总 */
   review?(sessionId: string): Promise<{ additions: number; deletions: number; files: string[] }>
+  /** 可选模型清单（含当前会话正在用的模型） */
+  listModels?(sessionId?: string): Promise<ModelCatalog>
+  /** 切换会话模型（reasoningLevel 供需要推理强度的模型使用） */
+  setSessionModel?(sessionId: string, providerId: string, modelId: string, reasoningLevel?: string): Promise<void>
 }
 
 type IndexListener = () => void

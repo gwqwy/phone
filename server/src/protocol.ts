@@ -68,6 +68,8 @@ export interface CapabilitySet {
   terminal: boolean
   /** 支持远程新建任务（session/create + 首条输入） */
   createTask: boolean
+  /** 支持列出/切换会话模型 */
+  models: boolean
 }
 
 export const NO_CAPABILITIES: CapabilitySet = {
@@ -77,6 +79,7 @@ export const NO_CAPABILITIES: CapabilitySet = {
   review: false,
   terminal: false,
   createTask: false,
+  models: false,
 }
 
 /** WebSocket 帧协议（手机 ↔ 本服务） */
