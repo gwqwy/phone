@@ -470,7 +470,7 @@ export class ZcodeAdapter implements HarnessAdapter {
             { sessionId, clientMode: 'web-remote-replayable', limit: 200, ...(beforeRowId !== undefined ? { beforeRowId } : {}) },
             30_000,
           )) as { rows?: V4Row[]; hasMore?: boolean }
-          const rows = (res?.rows ?? []).slice().reverse() // rowsRange 返回按 rowId 升序
+          const rows = res?.rows ?? [] // rowId 升序（本页为当前已知的最新段）
           events.unshift(...rowsToEvents(rows))
           if (!res?.hasMore || !rows.length) break
           beforeRowId = rows[0]!.rowId

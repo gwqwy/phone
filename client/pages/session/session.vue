@@ -100,12 +100,53 @@ async function scrollToBottom(): Promise<void> {
   if (last) scrollInto.value = `ev-${last.id}`
 }
 
-// 精简视图：默认只保留用户消息、AI 回复、终端、审批
+// 精简视图：按轮折叠——用户消息 + 折叠的执行过程 + 最终回复（像 ZCode 官方）
 const compact = ref(true)
-const visibleEvents = computed(() => {
-  if (!compact.value) return events.value
-  return events.value.filter((e) => e.kind === 'user' || e.kind === 'text' || e.kind === 'terminal' || e.kind === 'approval')
+const expandedTurns = ref<Set<number>>(new Set())
+
+interface TurnGroup {
+  turn: number
+  user?: TimelineEvent
+  work: TimelineEvent[]
+  texts: TimelineEvent[]
+  approvals: TimelineEvent[]
+}
+
+const turnGroups = computed<TurnGroup[]>(() => {
+  const groups: TurnGroup[] = []
+  let cur: TurnGroup | null = null
+  const ensure = (): TurnGroup => {
+    if (!cur) {
+      cur = { turn: groups.length, work: [], texts: [], approvals: [] }
+      groups.push(cur)
+    }
+    return cur
+  }
+  for (const ev of events.value) {
+    if (ev.kind === 'user') {
+      cur = { turn: groups.length, user: ev, work: [], texts: [], approvals: [] }
+      groups.push(cur)
+      continue
+    }
+    const g = ensure()
+    if (ev.kind === 'approval') g.approvals.push(ev)
+    else if (ev.kind === 'text') g.texts.push(ev)
+    g.work.push(ev)
+  }
+  // 每轮只展示最后一条 AI 文本，其余进折叠区
+  for (const g of groups) {
+    const lastText = g.texts[g.texts.length - 1]
+    if (lastText) g.work = g.work.filter((e) => e.id !== lastText.id)
+  }
+  return groups
 })
+
+function toggleTurn(turn: number): void {
+  const s = new Set(expandedTurns.value)
+  if (s.has(turn)) s.delete(turn)
+  else s.add(turn)
+  expandedTurns.value = s
+}
 
 async function send(): Promise<void> {
   const text = input.value.trim()
@@ -153,8 +194,28 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
       <view v-if="loading" class="placeholder"><text>加载中…</text></view>
       <view v-else-if="loadError" class="placeholder"><text>{{ loadError }}</text></view>
       <view v-else-if="!events.length" class="placeholder"><text>暂无消息</text></view>
+      <view v-else-if="compact" class="timeline-inner">
+        <view v-for="g in turnGroups" :key="g.turn">
+          <TimelineRow v-if="g.user" :ev="g.user" />
+          <TimelineRow
+            v-for="a in g.approvals"
+            :key="a.id"
+            :ev="a"
+            @resolve="(o) => resolve(a.id, o)"
+          />
+          <view v-if="g.work.length" class="turn-collapse" @tap="() => toggleTurn(g.turn)">
+            <text class="turn-collapse-label">{{ expandedTurns.has(g.turn) ? '收起执行过程' : `执行过程 · ${g.work.length} 步` }}</text>
+          </view>
+          <view v-if="expandedTurns.has(g.turn)">
+            <TimelineRow v-for="ev in g.work" :key="ev.id" :ev="ev" />
+          </view>
+          <TimelineRow v-if="g.tailText" :ev="g.tailText" />
+        </view>
+        <view v-if="running" class="running-hint"><text>● 正在工作中…</text></view>
+        <view class="timeline-pad" />
+      </view>
       <view v-else class="timeline-inner">
-        <view v-for="ev in visibleEvents" :id="`ev-${ev.id}`" :key="ev.id">
+        <view v-for="ev in events" :id="`ev-${ev.id}`" :key="ev.id">
           <TimelineRow :ev="ev" @resolve="(o) => resolve(ev.id, o)" />
         </view>
         <view v-if="running" class="running-hint"><text>● 正在工作中…</text></view>
@@ -202,6 +263,17 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
 }
 .timeline {
   height: calc(100vh - 48px - 58px);
+}
+.turn-collapse {
+  padding: 6px 10px;
+  margin: 4px 0;
+  background: var(--zp-bg-elev);
+  border-radius: 8px;
+  display: inline-block;
+}
+.turn-collapse-label {
+  color: var(--zp-accent);
+  font-size: 12px;
 }
 .timeline-inner {
   padding: 10px 14px 0;
