@@ -87,3 +87,21 @@
 - OSS：`packages/shared/src/zcode-protocol-v4/{transport,core,command}.ts`、`task-realtime.ts`、
   `packages/rpc/src/{protocol,channelClient,persistent-protocol}.ts`
 - 本仓库探针：`server/scripts/probe-relay.ts`（host 白名单：仅官方中继域名）
+
+## 8. 附：app-server 独立进程化的实测结论（2026-09-23）
+
+1. **启动必需**：`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 指向 builtin Provider 目录
+   （桌面端缓存 `~/.zcode/v2/runtime/provider/<platform>/<ver>/endpoint-<hash>/zcode-builtin.json`，
+   或安装目录 `resources/config/provider/zcode-builtin.json`），否则启动即退
+   「无法定位 CLI ZCode Built-in Provider Config」。（已在本仓库适配器实现自动定位注入。）
+2. **模型执行仍不可用**：账号 Provider 由桌面端宿主经 `provider/updateAccountConfig` 注入
+   （basedOn 必须匹配内置目录 revision，本机为 "30"；provider 目录含
+   account:bigmodel-individual-coding-plan，模型仅 GLM-5.3 / GLM-5.3-Flash）。
+   即使 overlay 注入成功且模型进入目录，**请求期鉴权材料**（provider runtime headers，
+   OAuth token）在 host 模式下由宿主的 credentialStore 供给（`providerRuntimeHeadersPort`
+   仅 standalone 模式创建）——独立进程要跑模型必须实现该鉴权端口（读共享凭据库
+   `~/.zcode/v2/credentials.json` + 刷新协议），属于「迷你桌面宿主」工程。
+3. 解锁远程发送的三条路径（按成本排序）：
+   a. 配置**个人 API Key** 提供方（personal provider，API-key 访问无需账号注入）；
+   b. 完成 **zcode-relay 适配器**（命令由桌面端自身执行，天然带账号）；
+   c. 实现上述「迷你桌面宿主」鉴权端口（工程量最大，能力最全）。

@@ -42,13 +42,18 @@ export class AppServerConnection {
     return this.#proc !== null && this.#proc.exitCode === null
   }
 
-  /** command 形如 `E:\...\zcode.cjs`（自动加 node）或 PATH 中的可执行名 */
-  start(command: string, args: string[], cwd: string, onLog?: (line: string) => void): Promise<void> {
+  /** command 形如 `E:\...\zcode.cjs`（自动加 node）或 PATH 中的可执行名；env 追加注入子进程 */
+  start(command: string, args: string[], cwd: string, onLog?: (line: string) => void, env?: Record<string, string>): Promise<void> {
     const useNode = /\.(cjs|mjs|js)$/i.test(command)
     const file = useNode ? process.execPath : command
     const argv = useNode ? [command, ...args] : args
     return new Promise((resolve, reject) => {
-      const proc = spawn(file, argv, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      const proc = spawn(file, argv, {
+        cwd,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: env ? { ...process.env, ...env } : undefined,
+      })
       this.#proc = proc
       let settled = false
 

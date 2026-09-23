@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
@@ -59,6 +59,42 @@ function friendlyControlError(e: unknown): Error {
 }
 
 /**
+ * 定位 ZCode Built-in Provider Config（app-server 启动必需，桌面端以
+ * ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 传给它）：
+ * 1) 最新一份桌面端缓存（~/.zcode/v2/runtime/provider/**\/zcode-builtin.json）
+ * 2) 桌面端安装目录的随包副本
+ */
+function resolveBuiltinProviderConfig(): string | null {
+  const runtimeDir = path.join(os.homedir(), '.zcode', 'v2', 'runtime', 'provider')
+  let newest: { file: string; m: number } | null = null
+  const stack = [runtimeDir]
+  while (stack.length) {
+    const dir = stack.pop()!
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) stack.push(full)
+      else if (e.name === 'zcode-builtin.json') {
+        try {
+          const m = statSync(full).mtimeMs
+          if (!newest || m > newest.m) newest = { file: full, m }
+        } catch {
+          // 忽略不可读项
+        }
+      }
+    }
+  }
+  if (newest) return newest.file
+  const bundled = 'E:\\zcode\\resources\\config\\provider\\zcode-builtin.json'
+  return existsSync(bundled) ? bundled : null
+}
+
+/**
  * ZCode 适配器。
  * 数据面：
  *  - 会话列表/状态：app-server RPC `session/list`（与本机桌面端共用 ~/.zcode 存储）
@@ -107,11 +143,16 @@ export class ZcodeAdapter implements HarnessAdapter {
       return
     }
     const cwd = os.homedir()
-    info(`[zcode] 启动 app-server：${command}（cwd=${cwd}）`)
+    // app-server 需要桌面端的 builtin Provider 配置，否则启动即退（无法定位 zcode-builtin.json）
+    const builtinConfig = resolveBuiltinProviderConfig()
+    const spawnEnv: Record<string, string> | undefined = builtinConfig
+      ? { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinConfig }
+      : undefined
+    info(`[zcode] 启动 app-server：${command}（cwd=${cwd}${builtinConfig ? '，builtin=' + builtinConfig : ''}）`)
     try {
       await this.#conn.start(command, ['app-server', '--stdio'], cwd, (line) => {
         info(`[zcode:server] ${line}`)
-      })
+      }, spawnEnv)
       this.#conn.onExit(() => {
         this.#ready = false
         this.#onIndexChanged()

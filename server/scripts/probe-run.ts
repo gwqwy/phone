@@ -25,17 +25,24 @@ async function main(): Promise<void> {
     return {}
   })
 
-  // 注入账号权益 overlay（桌面端宿主的职责；非 start-plan 只需 access+states，模型目录来自内置模板）
+  // 注入账号权益 overlay（basedOn 必须等于 worker 内置目录的 revision，否则账号层被丢弃）
+  let builtinRevision = 'unknown'
+  try {
+    const fs = await import('node:fs')
+    const builtinFile = 'C:\\Users\\find\\.zcode\\v2\\runtime\\provider\\windows-x86_64\\3.14.3\\endpoint-78d7c3bef4024722642626fe3669a799\\zcode-builtin.json'
+    builtinRevision = String((JSON.parse(fs.readFileSync(builtinFile, 'utf8')) as { revision?: string }).revision ?? 'unknown')
+    console.log(`[run] 内置目录 revision = ${builtinRevision}`)
+  } catch { /* 读不到则用 unknown */ }
   try {
     const acc = await conn.request(
       'provider/updateAccountConfig',
       {
         revision: String(Date.now()),
-        basedOnZCodeBuiltinRevision: 'unknown',
+        basedOnZCodeBuiltinRevision: builtinRevision,
         providers: {
           'account:bigmodel-individual-coding-plan': {
             access: { type: 'zhipu-account', entitled: true },
-            builtinModelIds: ['GLM-5.3', 'GLM-5.3-Flash', 'GLM-5V-Turbo', 'GLM-5.2', 'GLM-5.1', 'GLM-5.1-Highspeed', 'GLM-5', 'GLM-5-Turbo', 'GLM-4.7', 'GLM-4.7-FlashX', 'GLM-4.7-Flash', 'GLM-4.6', 'GLM-4.5-Air', 'GLM-4.5', 'GLM-4.6V', 'GLM-4.6V-Flash', 'GLM-4.6V-FlashX', 'GLM-4.1V-Thinking-FlashX', 'GLM-4.1V-Thinking-Flash', 'GLM-4-FlashX-250414', 'GLM-4-Flash-250414', 'GLM-4V-Flash'],
+            builtinModelIds: ['GLM-5.3', 'GLM-5.3-Flash'],
           },
         },
         states: {
