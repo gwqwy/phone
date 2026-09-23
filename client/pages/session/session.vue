@@ -165,7 +165,17 @@ async function send(): Promise<void> {
     await api.request('send', { sessionId: sessionId.value, text })
     input.value = ''
   } catch (e) {
-    uni.showToast({ title: String((e as Error).message ?? '发送失败').slice(0, 30), icon: 'none' })
+    // 发送失败也要让用户看到自己说了什么，并给出具体原因
+    const msg = String((e as Error).message ?? '发送失败')
+    events.value.push({
+      id: `local-${Date.now()}`,
+      kind: 'user',
+      ts: new Date().toISOString(),
+      status: 'error',
+      text,
+    })
+    void scrollToBottom()
+    uni.showModal({ title: '发送失败', content: msg.slice(0, 200), showCancel: false })
   } finally {
     sending.value = false
   }
