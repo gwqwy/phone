@@ -15,9 +15,14 @@ const LEVEL_ORDER: Record<HostLevel, number> = { loopback: 0, lan: 1, public: 2 
 export function classifyHost(hostHeader: string | undefined): HostLevel {
   if (!hostHeader) return 'public'
   let hostname = hostHeader.toLowerCase()
-  const colon = hostname.lastIndexOf(':')
-  if (colon > 0 && !hostname.includes(']')) hostname = hostname.slice(0, colon) // 去端口（IPv6 裸地址不带端口场景忽略）
-  hostname = hostname.replace(/^\[|\]$/g, '')
+  if (hostname.startsWith('[')) {
+    // [::1]:3930 → ::1
+    const end = hostname.indexOf(']')
+    hostname = end > 0 ? hostname.slice(1, end) : hostname.slice(1)
+  } else {
+    const colon = hostname.lastIndexOf(':')
+    if (colon > 0) hostname = hostname.slice(0, colon) // 去端口
+  }
   return classifyAddress(hostname)
 }
 

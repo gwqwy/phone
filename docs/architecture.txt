@@ -1,0 +1,10 @@
+手机（uni-app H5 / PWA）
+   │  HTTP(登录/引导) + WebSocket(实时流, JSON 帧, PIN 认证)
+   ▼
+电脑端 Node 服务 (server/)
+   ├─ auth: PIN + cookie + 限速 + Host 分级 fail-closed
+   ├─ core/harness: ★ HarnessAdapter 统一协议（扩展点）
+   ├─ core/meta: 置顶/归档/别名 元数据覆盖层 (.data/meta.json)
+   └─ adapters
+       ├─ zcode    → `zcode app-server`(stdio RPC) + 只读 SQLite(~/.zcode) + 轮询兜底
+       └─ template → DeepSeek Harness 接入要点（下一个适配器）
