@@ -24,16 +24,15 @@
 
 ## 快速开始
 
-要求：电脑端 Node.js ≥ 23.6（建议 24+）。
+要求：电脑端 Node.js ≥ 23.6（建议 24+）；手机端用 **HBuilderX**（uni-app 官方 IDE）。
+
+### 电脑端
 
 ```bash
 # 1. 安装依赖
 npm run setup
 
-# 2. 构建手机端（首次）
-npm run build:web
-
-# 3. 启动
+# 2. 启动
 npm start
 ```
 
@@ -45,14 +44,18 @@ npm start
 PIN: 12345678
 ```
 
-手机连同一 Wi-Fi，浏览器打开局域网地址 → 输入 PIN → 完成。
-（也可用终端二维码/带 `?pin=` 的地址扫码直登。）
+### 手机端（HBuilderX）
+
+1. 用 HBuilderX **打开 `client/` 目录**（标准 uni-app 布局：pages/ components/ static/ manifest.json）
+2. 「运行 → 运行到浏览器 → Chrome」调试，或「发行 → 网站 H5」
+3. **发行产物在 `client/unpackage/dist/build/h5`**，电脑端服务会自动托管它——手机浏览器直接访问上面的局域网地址即可，无需自己部署
+
+> 首次使用若手机端未发行，服务会提示 `client-not-built`。
 
 开发模式：
 
 ```bash
 npm run dev:server   # 服务端 watch 重启
-npm run dev:web      # 手机端 vite dev（API/WS 已代理到 3930）
 npm test             # 服务端单测
 ```
 
@@ -62,9 +65,10 @@ npm test             # 服务端单测
 {
   "port": 3930,              // 占用自动 +1 顺延
   "host": "0.0.0.0",
-  "clientDist": "…",         // H5 构建产物目录
+  "clientDist": "…",         // HBuilderX 发行产物目录（默认 client/unpackage/dist/build/h5）
   "zcodeCommand": "",        // zcode CLI 路径；留空自动探测桌面端内置 CLI
-  "zcodeCwd": ""             // app-server 工作目录，默认用户主目录
+  "zcodeCwd": "",            // app-server 工作目录，默认用户主目录
+  "relayPairingUrl": ""      // 官方中继配对链接（桌面端「远程控制」生成）→ 启用 zcode-relay 适配器
 }
 ```
 
@@ -106,12 +110,13 @@ npm test             # 服务端单测
 ```
 server/            Node.js ≥ 23.6 · TypeScript（原生直跑，无需编译）
   src/core/        统一协议 + HarnessAdapter 接口 + 元数据覆盖层
-  src/adapters/    zcode（v1）/ template（下一个接入的骨架）+ 开发指南
+  src/adapters/    zcode（本地 CLI）/ zcode-relay（官方中继，进行中）/ template + 开发指南
   scripts/         协议探测与 E2E 脚本（开发用）
   test/            单元测试（node --test）
-client/            uni-app Vue3 + Vite（H5 优先，保持小程序兼容）
-  src/pages/       登录 / 工作区列表 / 任务会话
-  src/components/  时间线行、侧面板、长按菜单、新建任务、主题切换
+client/            uni-app HBuilderX 项目（标准布局：pages/ components/ static/ manifest.json）
+  pages/           登录 / 工作区列表 / 任务会话
+  components/      时间线行、侧面板、长按菜单、新建任务、主题切换
+  api/ store/ theme/
 .reference/        参考仓库克隆（gitignore：dsh-pocket、zcode OSS）
 .data/             运行时数据（gitignore）
 ```

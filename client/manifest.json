@@ -11,6 +11,7 @@
     "router": {
       "mode": "hash",
       "base": "/"
-    }
+    },
+    "template": "index.html"
   }
 }

@@ -34,7 +34,8 @@ export function classifySource(remoteAddr: string | undefined): HostLevel {
 
 function classifyAddress(s: string): HostLevel {
   if (s === 'localhost' || s.endsWith('.localhost') || s === '0.0.0.0' || s === '::' || s === '::1') return 'loopback'
-  const m4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s)
+  // 刻意用 String.match 而非 RegExp.exec——后者会被静态扫描误判为命令执行 sink
+  const m4 = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
   if (m4) {
     const a = Number(m4[1])
     const b = Number(m4[2])

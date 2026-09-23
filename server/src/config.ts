@@ -18,14 +18,18 @@ export interface AppConfig {
   zcodeCommand: string
   /** app-server 的工作目录（决定其读取的存储），默认用户主目录 */
   zcodeCwd: string
+  /** 官方中继配对链接（桌面端「远程控制」生成）；配置后启用 zcode-relay 适配器 */
+  relayPairingUrl: string
 }
 
 const DEFAULTS: AppConfig = {
   port: 3930,
   host: '0.0.0.0',
-  clientDist: path.join(PROJECT_ROOT, 'client', 'dist', 'build', 'h5'),
+  // HBuilderX「发行 → 网站 H5」的默认产物目录
+  clientDist: path.join(PROJECT_ROOT, 'client', 'unpackage', 'dist', 'build', 'h5'),
   zcodeCommand: '',
   zcodeCwd: '',
+  relayPairingUrl: '',
 }
 
 export function loadConfig(): AppConfig {

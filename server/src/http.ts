@@ -63,7 +63,7 @@ function serveStatic(res: ServerResponse, root: string, pathname: string): void 
   if (!existsSync(root)) {
     sendJson(res, 503, {
       error: 'client-not-built',
-      message: '手机端尚未构建：npm --prefix client run build:h5',
+      message: '手机端尚未构建：用 HBuilderX 打开 client 目录，发行 → 网站 H5',
     })
     return
   }
@@ -82,11 +82,33 @@ function serveStatic(res: ServerResponse, root: string, pathname: string): void 
     }
   }
   const stat = statSync(file)
-  res.writeHead(200, {
+  const isHtml = file.endsWith('.html')
+  const headers: Record<string, string> = {
     'content-type': mimeOf(file),
-    'content-length': stat.size,
-    'cache-control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=86400',
+    'cache-control': isHtml ? 'no-cache' : 'public, max-age=86400',
     'x-content-type-options': 'nosniff',
+  }
+  if (!isHtml) {
+    headers['content-length'] = String(stat.size)
+    res.writeHead(200, headers)
+    createReadStream(file).pipe(res)
+    return
+  }
+  // HTML：注入 PWA 元数据（HBuilderX 项目保持纯净，托管层负责加壳）
+  res.writeHead(200, headers)
+  const body = createReadStream(file)
+  let injected = false
+  body.setEncoding('utf8')
+  body.on('data', (chunk: string) => {
+    if (!injected && chunk.includes('</head>')) {
+      injected = true
+      chunk = chunk.replace(
+        '</head>',
+        `<link rel="manifest" href="/static/manifest.webmanifest" /><meta name="theme-color" content="#101014" /><link rel="apple-touch-icon" href="/static/icons/icon-192.png" /><meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /></head>`,
+      )
+    }
+    res.write(chunk)
   })
-  createReadStream(file).pipe(res)
+  body.on('end', () => res.end())
+  body.on('error', () => res.end())
 }

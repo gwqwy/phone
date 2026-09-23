@@ -8,7 +8,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import WebSocket from 'ws'
 
-const BASE = process.env.ZPHONE_WS ?? 'ws://127.0.0.1:3930/ws'
+// 开发 E2E：固定连本机回环（不读环境变量，避免污点入口）
+const BASE = 'ws://127.0.0.1:3930/ws'
 const WORKSPACE = 'E:\\文件\\编程文件\\zcode phone\\.data\\test-ws'
 const TARGET = path.join(WORKSPACE, 'zphone-m2.txt')
 

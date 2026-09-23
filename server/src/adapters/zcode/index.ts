@@ -28,14 +28,18 @@ function toIso(v: string | number | undefined): string {
 }
 
 function resolveZcodeCommand(configured: string): string | null {
-  if (configured.trim()) return configured.trim()
-  if (process.env.ZCODE_CLI) return process.env.ZCODE_CLI
-  const candidates = [
+  // 候选来源：config.json（本机可信文件）与环境变量；无论来源，都必须通过
+  // 「存在 + 扩展名白名单 + 指向 zcode CLI」三重校验后才允许 spawn。
+  const candidates = [configured.trim(), process.env.ZCODE_CLI ?? '']
+  const defaults = [
     'E:\\zcode\\resources\\glm\\zcode.cjs', // 本机桌面端内置 CLI
     path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'zcode', 'resources', 'glm', 'zcode.cjs'),
   ]
-  for (const c of candidates) {
-    if (c && existsSync(c)) return c
+  for (const c of [...candidates, ...defaults]) {
+    if (!c || !existsSync(c)) continue
+    if (!/\.(cjs|mjs|js|exe|cmd)$/i.test(c)) continue
+    if (!/zcode/i.test(path.basename(c))) continue
+    return c
   }
   return null
 }

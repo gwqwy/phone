@@ -91,6 +91,19 @@ async function checkAuth(): Promise<void> {
 }
 
 const activeAdapter = computed(() => conn.hello?.adapters[0] ?? null)
+const adapterStateText = computed(() => {
+  const a = activeAdapter.value
+  if (!a) return '—'
+  if (a.ready) return '已就绪'
+  return a.id === 'zcode-relay' ? '等待桌面端远程控制激活' : '未就绪'
+})
+const relayHint = computed(() => {
+  const a = activeAdapter.value
+  if (a && a.id === 'zcode-relay' && !a.ready) {
+    return '在电脑端 ZCode 打开「远程控制」即可自动配对'
+  }
+  return ''
+})
 const counts = computed(() => `${index.workspaces.length} 个工作区 · ${index.tasks.length} 个任务`)
 const activeTasks = computed(() => index.tasks.filter((t) => !t.archived))
 
@@ -140,8 +153,9 @@ function relativeTime(iso: string): string {
           {{ conn.connected ? '已连接到桌面服务' : conn.retryCount > 0 ? '重连中…' : '正在连接桌面服务…' }}
         </text>
         <text class="info-sub">
-          适配器：{{ activeAdapter ? `${activeAdapter.label} · ${activeAdapter.ready ? '已就绪' : '未就绪'}` : '—' }}
+          适配器：{{ activeAdapter ? `${activeAdapter.label} · ${adapterStateText}` : '—' }}
         </text>
+        <text v-if="relayHint" class="info-hint">{{ relayHint }}</text>
       </view>
       <view class="section-head">
         <text class="section-title">当前设备上的工作区和任务</text>
@@ -247,6 +261,12 @@ function relativeTime(iso: string): string {
   margin-top: 6px;
   font-size: 12px;
   color: var(--zp-text-dim);
+}
+.info-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--zp-warn);
 }
 .section-head {
   margin: 18px 2px 10px;

@@ -5,6 +5,7 @@ import { AuthService } from './auth.ts'
 import { HarnessRegistry } from './core/harness.ts'
 import { MetaStore } from './core/meta.ts'
 import { ZcodeAdapter } from './adapters/zcode/index.ts'
+import { ZcodeRelayAdapter } from './adapters/zcode-relay/index.ts'
 import { createHandler } from './http.ts'
 import { attachWs } from './ws.ts'
 
@@ -24,6 +25,13 @@ async function main(): Promise<void> {
     .start()
     .then(() => registry.notifyIndexChanged())
     .catch((e) => info('[zcode] 启动失败', String(e)))
+
+  // 官方中继直连（进行中）：配置了配对链接才启用
+  if (config.relayPairingUrl.trim()) {
+    const relay = new ZcodeRelayAdapter(config, () => registry.notifyIndexChanged())
+    registry.register(relay)
+    relay.start().catch((e) => info('[relay] 启动失败', String(e)))
+  }
 
   const server = createServer(createHandler({ config, auth, registry, version: VERSION }))
   attachWs(server, { auth, registry, meta })

@@ -7,11 +7,12 @@
     "node": ">=23.6"
   },
   "scripts": {
-    "setup": "npm --prefix server install && npm --prefix client install",
-    "dev:server": "npm --prefix server run dev",
-    "dev:web": "npm --prefix client run dev:h5",
-    "build:web": "npm --prefix client run build:h5",
+    "setup": "npm --prefix server install",
     "start": "npm --prefix server run start",
+    "dev:server": "npm --prefix server run dev",
     "test": "npm --prefix server run test"
+  },
+  "uniappClient": {
+    "note": "client/ 是 HBuilderX 项目：用 HBuilderX 打开 client 目录，运行/发行 H5 后产物在 client/unpackage/dist/build/h5，由 server 直接托管"
   }
 }
