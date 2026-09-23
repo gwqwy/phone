@@ -97,7 +97,35 @@
 
 → 要让「桌面端已有会话」支持远程发送/审批，需要完成阶段二（桥接 RPC 栈）。
 
-## 10. 附：会话模型与执行链路的实测结论
+## 11. 阶段二内层编码规范（已从 OSS 源码逐行核对 + 编码层已实现）
+
+桥接内层（`dataBase64`）结构：**[13 字节帧头] + channel 载荷**
+
+**13 字节帧头**（`packages/rpc/src/protocol.ts`）
+```
+type:u8 (=1 Regular | 2 Control | 3 Ack | 9 KeepAlive)
+id:u32BE   ack:u32BE   length:u32BE
+```
+
+**channel 载荷**（`packages/rpc/src/serialization.ts`）
+```
+serialize([RequestType, requestId, channelName, methodName]) + serialize(arg)
+每个值 = [1 byte DataType][VQL 长度(按需)][数据]
+DataType: Undefined=0 String=1 Buffer=2 VSBuffer=3 Array=4 Object=5(JSON) Int=6(VQL)
+VQL: 7bit/组，最高位为续位（0→[0x00]，128→[0x80,0x01]）
+```
+
+**已实现**：`server/src/adapters/zcode-relay/rpc-codec.ts`
+（`serializeValue` / `deserializeValue` / `frameRpc` / `parseRpcFrames`，含 VQL 编解码；往返自测通过）
+
+**待补**（下一轮即可运行）：
+1. `RequestType` 枚举值 → `packages/rpc/src/channels.shared.ts`
+2. `channelName`（服务通道名，如 agent 服务）→ `packages/services` 的 service descriptor
+3. v4 方法名与参数（`initializeConversationV4` / `conversationRowsRangeV4` / `v4command` 等）
+4. 首帧 `Initialize` 握手（channelClient 的 State.Idle 前置）
+
+完成后即可：桥接内建立完整 RPC → 订阅 sessions-index/conversation → 发送 v4command，
+实现「桌面端已有会话」的远程发送与审批（命令由桌面端自身执行、ZCode 界面显示已连接）。
 
 - `state.updated` 通知里的 `patch.model.available[]` 是官方 UI 的模型清单来源
   （含 `ref:{providerId, modelId}`、`label`、`providerLabel`、`contextWindow`、最大输出等），
