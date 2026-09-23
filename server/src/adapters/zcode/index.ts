@@ -101,6 +101,24 @@ function resolveBuiltinProviderConfig(): string | null {
   return existsSync(bundled) ? bundled : null
 }
 
+/** 读取个人 provider 的 API Key（provider_config.json 里 api-key 类型）——供运行时鉴权头使用 */
+function readPersonalProviderApiKey(providerId: string): string | null {
+  const file = path.join(os.homedir(), '.zcode', 'v2', 'provider_config.json')
+  try {
+    const doc = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as {
+      config?: { providerConfigRules?: { providerRules?: Record<string, unknown>[] } }
+    }
+    for (const rule of doc.config?.providerConfigRules?.providerRules ?? []) {
+      if (String(rule.providerId ?? '') !== providerId) continue
+      const access = ((rule.config ?? {}) as { access?: { type?: string; apiKey?: string } }).access
+      if (access?.type === 'api-key' && access.apiKey) return access.apiKey
+    }
+  } catch {
+    // 无配置
+  }
+  return null
+}
+
 /**
  * 把个人 API Key 提供方合并进 ZCode 的个人 Provider 配置
  * （~/.zcode/v2/provider_config.json，桌面端与 CLI/app-server 共用，registry 默认读取）。
@@ -397,6 +415,22 @@ export class ZcodeAdapter implements HarnessAdapter {
         this.#pushApproval(String(params.sessionId ?? ''), requestId, params, kind)
       })
     }
+    // Provider 运行时鉴权材料（host 模式下由宿主供给）：缺它模型请求会失败
+    // 响应 schema: {headersApplied:true, requestAuth:{apiKey?, headers?}} | {headersApplied:false, errorMessage?}
+    if (method === 'interaction/requestProviderRuntimeHeaders') {
+      const providerId = String(
+        params.providerId ?? (params.modelSelection as { providerId?: string } | undefined)?.providerId ?? '',
+      )
+      const apiKey = providerId ? readPersonalProviderApiKey(providerId) : null
+      if (apiKey) return { headersApplied: true, requestAuth: { apiKey } }
+      // 账号类 provider（account:*）需要 OAuth 令牌，独立进程暂无法提供
+      warn(`[zcode] provider ${providerId} 的鉴权材料不可用（非个人 API Key）`)
+      return { headersApplied: false, errorMessage: `provider ${providerId} 需要桌面端账号鉴权` }
+    }
+    // 官方 MCP 鉴权头（不影响主流程）：按协议返回结构化失败
+    if (method === 'interaction/requestOfficialMcpAuthHeaders') {
+      return { ok: false, reason: 'official_auth_unavailable' }
+    }
     warn(`[zcode] 未处理的反向请求 ${method}，已自动应答`)
     return {}
   }
@@ -676,10 +710,14 @@ export class ZcodeAdapter implements HarnessAdapter {
       // 无个人配置
     }
 
-    // 2) config.json 里配置的个人 bigmodel provider / taskModel
+    // 2) config.json 里配置的个人 bigmodel provider（含 GLM-5.3 / GLM-5.3-Flash）
     const pp = this.#config.personalProvider
-    if (pp.apiKey.trim() && pp.modelId.trim()) {
-      add({ providerId: 'personal-bigmodel', modelId: pp.modelId, label: `BigModel · ${pp.modelId}`, note: 'API Key' })
+    if (pp.apiKey.trim()) {
+      const ids = [...new Set([pp.modelId.trim(), 'GLM-5.3', 'GLM-5.3-Flash'].filter(Boolean))]
+      for (const id of ids) {
+        if (!id) continue
+        add({ providerId: 'personal-bigmodel', modelId: id, label: `BigModel · ${id}`, note: 'API Key' })
+      }
     }
     const tm = this.#config.taskModel
     if (tm?.modelId?.trim()) {

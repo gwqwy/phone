@@ -39,16 +39,18 @@ async function main(): Promise<void> {
   conn.onAnyNotification((method, params) => {
     const p = (params ?? {}) as Record<string, unknown>
     if (method === 'session/event' && String(p.sessionId) === sessionId) {
-      process.stdout.write(`[evt] ${p.type} ${JSON.stringify(p.payload ?? {}).slice(0, 260)}\n`)
+      const type = String(p.type)
+      // 全量打印（含 part.delta / turn.failed 等）
+      process.stdout.write(`[evt] ${type} ${JSON.stringify(p.payload ?? {}).slice(0, 400)}\n`)
     }
     if (method === 'state.updated') {
-      process.stdout.write(`[state] ${JSON.stringify(p).slice(0, 200)}\n`)
+      process.stdout.write(`[state] ${JSON.stringify(p).slice(0, 240)}\n`)
     }
   })
 
   const sent = await conn.request('session/send', { sessionId, content: '回复 ok' }, 30_000)
   process.stdout.write(`[diag] send → ${JSON.stringify(sent).slice(0, 160)}\n`)
-  await new Promise((r) => setTimeout(r, 25_000))
+  await new Promise((r) => setTimeout(r, 90_000))
 
   // 读会话条目（turn 失败原因通常在此）
   const db = new DatabaseSync(path.join(os.homedir(), '.zcode', 'cli', 'db', 'db.sqlite'), { readOnly: true })
