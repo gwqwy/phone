@@ -100,11 +100,11 @@ async function scrollToBottom(): Promise<void> {
   if (last) scrollInto.value = `ev-${last.id}`
 }
 
-// 精简视图：默认隐藏思考与一般工具行（编辑/终端/审批/正文保留）
+// 精简视图：默认只保留用户消息、AI 回复、终端、审批
 const compact = ref(true)
 const visibleEvents = computed(() => {
   if (!compact.value) return events.value
-  return events.value.filter((e) => e.kind !== 'think' && e.kind !== 'tool' && e.kind !== 'patch' && e.kind !== 'step' && e.kind !== 'system')
+  return events.value.filter((e) => e.kind === 'user' || e.kind === 'text' || e.kind === 'terminal' || e.kind === 'approval')
 })
 
 async function send(): Promise<void> {

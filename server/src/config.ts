@@ -47,7 +47,9 @@ export function loadConfig(): AppConfig {
   let user: Partial<AppConfig> = {}
   if (existsSync(file)) {
     try {
-      user = JSON.parse(readFileSync(file, 'utf8')) as Partial<AppConfig>
+      // 兼容带 BOM 的 UTF-8（Windows PowerShell 默认写出会带 BOM）
+      const text = readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
+      user = JSON.parse(text) as Partial<AppConfig>
     } catch (e) {
       warn('config.json 解析失败，使用默认配置', e)
     }
