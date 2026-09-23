@@ -63,6 +63,8 @@ export interface RelayEvents {
   onInnerJson?(frame: Record<string, unknown>): void
   /** bootstrap-response 到达（数据面通道就绪的标志） */
   onBootstrap?(frame: Record<string, unknown>): void
+  /** 桥接内入站二进制帧的原始字节（诊断用） */
+  onRawFrame?(bytes: Buffer): void
 }
 
 // ---------- 内层编码 ----------
@@ -373,6 +375,7 @@ export class RelayClient {
     }
     // 阶段二：优先按 13 字节帧 + channel 序列化解析（桥接内 RPC）
     const frames = parseRpcFrames(bytes)
+    this.#events.onRawFrame?.(bytes)
     if (frames.length) {
       for (const f of frames) {
         this.#ackSeq = f.ack || this.#ackSeq
@@ -381,14 +384,21 @@ export class RelayClient {
       return
     }
     // 兼容：旧的 NDJSON 路径（帧头缺失时）
+    let parsedAny = false
     for (const line of bytes.toString('utf8').split('\n')) {
       const trimmed = line.trim()
       if (!trimmed) continue
       try {
         this.#events.onV4Message?.(JSON.parse(trimmed) as Record<string, unknown>)
+        parsedAny = true
       } catch {
-        warn('[relay] v4 消息解析失败', trimmed.slice(0, 160))
+        // 结构未知：交给上层按 hex 诊断
       }
+    }
+    if (!parsedAny) {
+      warn(
+        `[relay] 入站帧无法解析：${bytes.length}B head=${bytes.subarray(0, 48).toString('hex')} text=${bytes.subarray(0, 80).toString('utf8').replace(/[^\x20-\x7e]/g, '.')}`,
+      )
     }
   }
 

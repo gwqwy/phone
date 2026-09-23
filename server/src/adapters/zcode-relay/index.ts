@@ -5,6 +5,27 @@ import type { AppConfig } from '../../config.ts'
 import { NO_CAPABILITIES, type CapabilitySet, type StreamFrame, type TaskSummary, type TimelineEvent, type Workspace } from '../../protocol.ts'
 import { info, warn } from '../../log.ts'
 
+/** 桌面端 displayStatus → 统一状态 */
+function relayStatus(s: string): TaskSummary['status'] {
+  switch (s) {
+    case 'running':
+    case 'inProgress':
+      return 'running'
+    case 'completed':
+      return 'completed'
+    case 'failed':
+    case 'error':
+      return 'error'
+    case 'waiting':
+    case 'waitingApproval':
+      return 'waiting-approval'
+    case 'idle':
+      return 'idle'
+    default:
+      return 'unknown'
+  }
+}
+
 /**
  * 官方中继直连适配器（进行中）。
  *
@@ -26,6 +47,7 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
   #onIndexChanged: () => void
   #v4LogCount = 0
   #workspaces: Workspace[] = []
+  #relayTasks: TaskSummary[] = []
   #activeWorkspaceKey = ''
   #activeTaskId = ''
   #bridge: Record<string, unknown> | null = null
@@ -41,19 +63,33 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
     }
     const list = await this.#client?.requestWorkspaceList()
     if (list) {
-      const items = (list.result ?? list.workspaces ?? []) as Record<string, unknown>[]
-      if (Array.isArray(items) && items.length) {
-        this.#workspaces = items
-          .map((w) => ({
-            id: String(w.workspaceKey ?? w.workspacePath ?? w.path ?? ''),
-            name: String(w.name ?? w.workspaceName ?? w.workspacePath ?? '').split(/[\\/]/).pop() ?? '',
-            path: String(w.workspacePath ?? w.path ?? ''),
-          }))
-          .filter((w) => w.id)
-        info(`[relay] 工作区列表：${this.#workspaces.length} 个`)
-      } else {
-        info(`[relay] workspace-list 响应形态：${JSON.stringify(list).slice(0, 300)}`)
+      // 实测结构：{result:{activeTaskId, activeWorkspaceKey, tasks:[{taskId,title,displayStatus,provider,createdAt,updatedAt,workspaceKey}]}}
+      const result = (list.result ?? {}) as Record<string, unknown>
+      const tasks = (Array.isArray(result.tasks) ? result.tasks : []) as Record<string, unknown>[]
+      const activeKey = String(result.activeWorkspaceKey ?? '')
+      if (activeKey) this.#activeWorkspaceKey = activeKey
+      const wsMap = new Map<string, Workspace>()
+      this.#relayTasks = []
+      for (const t of tasks) {
+        const taskId = String(t.taskId ?? t.id ?? '')
+        if (!taskId) continue
+        const wsKey = String(t.workspaceKey ?? activeKey ?? '')
+        const wsPath = wsKey
+        const created = Number(t.createdAt ?? 0)
+        const updated = Number(t.updatedAt ?? created)
+        this.#relayTasks.push({
+          id: taskId,
+          workspaceId: wsKey,
+          title: String(t.title ?? '未命名任务'),
+          status: relayStatus(String(t.displayStatus ?? t.status ?? '')),
+          updatedAt: new Date(updated || Date.now()).toISOString(),
+        })
+        if (wsKey && !wsMap.has(wsKey)) {
+          wsMap.set(wsKey, { id: wsKey, name: wsPath.split(/[\\/]/).pop() ?? wsKey, path: wsPath })
+        }
       }
+      this.#workspaces = [...wsMap.values()]
+      info(`[relay] 工作区 ${this.#workspaces.length} 个，任务 ${this.#relayTasks.length} 个`)
     }
     const key = this.#activeWorkspaceKey || this.#workspaces[0]?.id
     if (key) {
@@ -169,13 +205,19 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
     this.#ready = false
   }
 
-  // 数据面接入后实现；先给出诚实的空实现
+  // 数据面（阶段一已可用：工作区与任务列表来自桌面端中继）
   async listWorkspaces(): Promise<Workspace[]> {
-    return []
+    return this.#workspaces
   }
 
   async listSessions(): Promise<TaskSummary[]> {
-    return []
+    // 状态为 running 的活跃任务 + 最近更新的任务
+    const active = this.#activeTaskId
+    return [...this.#relayTasks].sort((a, b) => {
+      if (a.id === active) return -1
+      if (b.id === active) return 1
+      return b.updatedAt.localeCompare(a.updatedAt)
+    })
   }
 
   async history(_sessionId: string, _range?: HistoryRange): Promise<TimelineEvent[]> {
