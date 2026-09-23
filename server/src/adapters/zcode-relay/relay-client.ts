@@ -1,5 +1,14 @@
 import { createHmac, randomUUID } from 'node:crypto'
 import { info, warn } from '../../log.ts'
+import {
+  RPC_CHANNEL_ZCODE_AGENT,
+  RpcRequestType,
+  RpcResponseType,
+  deserializeValue,
+  frameRpc,
+  parseRpcFrames,
+  serializeValue,
+} from './rpc-codec.ts'
 
 /**
  * 官方中继客户端（协议细节见 docs/relay-protocol.md，均经 bundle 逆向 + 实测验证）。
@@ -362,19 +371,25 @@ export class RelayClient {
     } catch {
       return
     }
-    for (const f of channelFrames(bytes)) {
-      this.#ackSeq = f.ack || this.#ackSeq
-      for (const line of f.payload.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        try {
-          this.#events.onV4Message?.(JSON.parse(trimmed) as Record<string, unknown>)
-        } catch {
-          warn('[relay] v4 消息解析失败', trimmed.slice(0, 160))
-        }
+    // 阶段二：优先按 13 字节帧 + channel 序列化解析（桥接内 RPC）
+    const frames = parseRpcFrames(bytes)
+    if (frames.length) {
+      for (const f of frames) {
+        this.#ackSeq = f.ack || this.#ackSeq
+        this.#dispatchChannelBody(f.body)
+      }
+      return
+    }
+    // 兼容：旧的 NDJSON 路径（帧头缺失时）
+    for (const line of bytes.toString('utf8').split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        this.#events.onV4Message?.(JSON.parse(trimmed) as Record<string, unknown>)
+      } catch {
+        warn('[relay] v4 消息解析失败', trimmed.slice(0, 160))
       }
     }
-    void seq
   }
 
   /** 发送 v4 消息：先裸 NDJSON，若 8 秒无响应则改试 13 字节帧头包裹 */
@@ -418,6 +433,82 @@ export class RelayClient {
   /** 供适配器后续使用的 v4 发送入口（先按当前实证模式封装） */
   sendV4(obj: Record<string, unknown>): void {
     this.#sendInner(JSON.stringify(obj) + '\n')
+  }
+
+  // ---------- 阶段二：桥接内 channel RPC（13 字节帧 + channel 序列化） ----------
+
+  #rpcSeq = 0
+  #rpcPending = new Map<number, (r: { ok: boolean; body?: unknown; error?: string }) => void>()
+
+  /** 桥接内 RPC 调用：serialize([Promise, id, channel, method]) + serialize(arg) */
+  rpcCall(method: string, arg?: unknown, timeoutMs = 30_000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!this.#ws || this.#state !== 'matched') {
+        reject(new Error('中继未配对'))
+        return
+      }
+      const id = ++this.#rpcSeq
+      const timer = setTimeout(() => {
+        this.#rpcPending.delete(id)
+        reject(new Error(`RPC 超时：${method}`))
+      }, timeoutMs)
+      this.#rpcPending.set(id, (r) => {
+        clearTimeout(timer)
+        if (r.ok) resolve(r.body)
+        else reject(new Error(r.error ?? 'RPC 失败'))
+      })
+      const header = serializeValue([RpcRequestType.Promise, id, RPC_CHANNEL_ZCODE_AGENT, method])
+      const payload = serializeValue(arg)
+      const frame = frameRpc(header, payload, id, this.#ackSeq)
+      this.#v4Mode = 'channel-frame'
+      this.#sendBinaryFrame(frame)
+      info(`[relay][rpc] → ${method}（id=${id}，${frame.length}B）`)
+    })
+  }
+
+  /** 把二进制帧包进 rpc-frame data 发送 */
+  #sendBinaryFrame(frame: Buffer): void {
+    this.#seq += 1
+    this.sendRaw({
+      type: 'data',
+      payload: {
+        zcode_type: 'rpc-frame',
+        ...this.#identity,
+        seq: this.#seq,
+        dataBase64: frame.toString('base64'),
+      },
+      client_ts: Date.now(),
+    })
+  }
+
+  /** 解析入站 channel 帧：PromiseSuccess/PromiseError → 兑现；EventFire → 事件 */
+  #dispatchChannelBody(body: Buffer): void {
+    try {
+      const head = deserializeValue(body)
+      const arr = Array.isArray(head.value) ? (head.value as unknown[]) : null
+      const respType = arr ? Number(arr[0]) : Number(head.value)
+      const id = arr ? Number(arr[1]) : NaN
+      const payload = deserializeValue(body, head.next).value
+      if (respType === RpcResponseType.PromiseSuccess || respType === RpcResponseType.PromiseError || respType === RpcResponseType.PromiseErrorObj) {
+        const cb = this.#rpcPending.get(id)
+        if (!cb) return
+        this.#rpcPending.delete(id)
+        cb(
+          respType === RpcResponseType.PromiseSuccess
+            ? { ok: true, body: payload }
+            : { ok: false, error: JSON.stringify(payload).slice(0, 300) },
+        )
+        return
+      }
+      if (respType === RpcResponseType.EventFire) {
+        this.#events.onV4Message?.({ kind: 'event', id, payload })
+        return
+      }
+      if (respType === RpcResponseType.Initialize) return
+      this.#events.onV4Message?.({ kind: 'channel', respType, id, payload })
+    } catch (e) {
+      warn('[relay][rpc] channel 帧解析失败', String(e).slice(0, 140))
+    }
   }
 }
 

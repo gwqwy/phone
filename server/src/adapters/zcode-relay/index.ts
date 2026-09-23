@@ -1,4 +1,5 @@
 import { parsePairingUrl, RelayClient, type RelayPairing } from './relay-client.ts'
+import { randomUUID } from 'node:crypto'
 import type { HarnessAdapter, HistoryRange, StreamCallback } from '../../core/harness.ts'
 import type { AppConfig } from '../../config.ts'
 import { NO_CAPABILITIES, type CapabilitySet, type StreamFrame, type TaskSummary, type TimelineEvent, type Workspace } from '../../protocol.ts'
@@ -60,12 +61,39 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
       if (bridge) {
         this.#bridge = (bridge.bridge ?? bridge) as Record<string, unknown>
         info(`[relay] 桥接就绪：${JSON.stringify(this.#bridge).slice(0, 200)}`)
-        // 阶段二首步：桥接通道内发起 v4 clientHello（先裸 NDJSON，8s 无响应自动改 13 字节帧头）
-        this.#client?.sendV4Hello()
-        info('[relay] 已通过桥接发送 v4 clientHello')
+        void this.#rpcHandshake()
       }
     }
     this.#onIndexChanged()
+  }
+
+  /** 阶段二：桥接内 RPC 握手（官方 mobile 序列：helloConversationV4 → initializeConversationV4） */
+  async #rpcHandshake(): Promise<void> {
+    const client = this.#client
+    if (!client) return
+    try {
+      const hello = await client.rpcCall('helloConversationV4', undefined, 20_000)
+      info(`[relay][rpc] hello → ${JSON.stringify(hello).slice(0, 300)}`)
+      const clientHello = {
+        kind: 'clientHello',
+        protocolVersion: 3,
+        clientId: randomUUID(),
+        clientKind: 'mobileRemote',
+        appVersion: this.#config.relayPairingUrl ? 'web' : 'unknown',
+        capabilities: { workspaceHookReviewUi: true },
+      }
+      const init = await client.rpcCall('initializeConversationV4', clientHello, 20_000)
+      info(`[relay][rpc] initializeConversationV4 → ${JSON.stringify(init ?? null).slice(0, 200)}`)
+      // 订阅会话索引（任务列表）
+      const sub = await client.rpcCall(
+        'subscribeSessionsIndexV4',
+        { subscriptionId: `zphone-${Date.now()}`, clientMode: 'web-remote-replayable' },
+        20_000,
+      )
+      info(`[relay][rpc] subscribeSessionsIndexV4 → ${JSON.stringify(sub ?? null).slice(0, 240)}`)
+    } catch (e) {
+      warn(`[relay][rpc] 握手失败（可能需先 Initialize 帧）：${String(e).slice(0, 200)}`)
+    }
   }
 
   constructor(config: AppConfig, onIndexChanged: () => void) {

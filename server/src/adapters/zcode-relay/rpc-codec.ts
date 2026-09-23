@@ -26,6 +26,26 @@ export const RpcDataType = {
 export const RPC_FRAME_TYPE_REGULAR = 1
 export const RPC_HEADER_SIZE = 13
 
+/** 请求类型（packages/rpc/src/channels.shared.ts） */
+export const RpcRequestType = {
+  Promise: 100,
+  PromiseCancel: 101,
+  EventListen: 102,
+  EventDispose: 103,
+} as const
+
+/** 响应类型（同上） */
+export const RpcResponseType = {
+  Initialize: 200,
+  PromiseSuccess: 201,
+  PromiseError: 202,
+  PromiseErrorObj: 203,
+  EventFire: 204,
+} as const
+
+/** ZCode 服务通道名（packages/shared/src/channels.ts 的 ServiceChannels） */
+export const RPC_CHANNEL_ZCODE_AGENT = 'zcode-agent'
+
 /** VQL 变长整数编码（7 bit 一组，最高位续位） */
 export function writeInt32VQL(value: number): Buffer {
   if (value === 0) return Buffer.from([0])
