@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
 import { ZcodeDbReader } from './db.ts'
-import { mapStatus, messageToEvents } from './map.ts'
+import { mapStatus, rowsToEvents, type V4Row } from './map.ts'
 import type { HarnessAdapter, HistoryRange, StreamCallback } from '../../core/harness.ts'
 import type { AppConfig } from '../../config.ts'
 import type { CapabilitySet, StreamFrame, TaskSummary, TimelineEvent, Workspace } from '../../protocol.ts'
@@ -43,13 +43,25 @@ function resolveZcodeCommand(configured: string): string | null {
 const POLL_MS = 2000
 const LIST_REFRESH_MS = 10_000
 
+const MODEL_ACCESS_HINT =
+  '电脑端 ZCode 未向独立进程开放模型账号（桌面端 3.14.x 由宿主注入账号，headless 不可用）。远程发送暂不可用，查看任务不受影响；配置个人 API Key 后即可解锁（见 README）。'
+
+function friendlyControlError(e: unknown): Error {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (msg.includes('Select a model') || msg.includes('Model creation failed') || msg.includes('不存在 Model')) {
+    return new Error(MODEL_ACCESS_HINT)
+  }
+  return e instanceof Error ? e : new Error(msg)
+}
+
 /**
  * ZCode 适配器。
  * 数据面：
  *  - 会话列表/状态：app-server RPC `session/list`（与本机桌面端共用 ~/.zcode 存储）
- *  - 历史时间线：只读直读 SQLite（0.16.9 的 session/read 对旧会话物化失败，见 db.ts 注释）
+ *  - 历史时间线：v4 rowsRange（官方 UI 投影）→ 只读 SQLite 兜底
  *  - 实时流：legacy 订阅（本进程激活的会话）+ DB 轮询兜底（桌面端正在跑的会话也能看到推进）
- * 控制面（M2）：session/send / session/stop / 审批反向请求。
+ * 控制面：session/create + send + 审批反向请求均已接线；模型执行依赖桌面端账号注入，
+ * 当前桌面版本在独立进程中不可用（见 MODEL_ACCESS_HINT），一旦账号可达（个人 API Key / 新版接口）即自动生效。
  */
 export class ZcodeAdapter implements HarnessAdapter {
   readonly id = 'zcode'
@@ -74,7 +86,7 @@ export class ZcodeAdapter implements HarnessAdapter {
   }
 
   capabilities(): CapabilitySet {
-    return { sendText: true, stop: true, approvals: true, review: true, terminal: false }
+    return { sendText: true, stop: true, approvals: true, review: true, terminal: false, createTask: true }
   }
 
   isReady(): boolean {
@@ -250,6 +262,16 @@ export class ZcodeAdapter implements HarnessAdapter {
 
   /** 服务端反向请求：必须返回 Promise，等用户裁决后再回帧（M2 控制面使用） */
   #onReverse(method: string, params: Record<string, unknown>): unknown {
+    // 运行时偏好：桌面端宿主会应答此请求；缺省应答会导致会话物化失败
+    // （nativeSearchEnhancementsEnabled 校验，见 zcodeSessionRuntimePreferencesResultSchema）
+    if (method === 'session/requestRuntimePreferences') {
+      return {
+        nativeSearchEnhancementsEnabled: true,
+        memoryEnabled: false,
+        askUserQuestionAutoResolutionEnabled: true,
+        modelContextBudgetStrategy: 'preflight-v1',
+      }
+    }
     if (method === 'interaction/requestPermission' || method === 'interaction/requestUserInput') {
       const requestId = String(params.requestId ?? '')
       const kind = method === 'interaction/requestPermission' ? 'permission' : 'userInput'
@@ -354,18 +376,29 @@ export class ZcodeAdapter implements HarnessAdapter {
   }
 
   async history(sessionId: string, _range?: HistoryRange): Promise<TimelineEvent[]> {
-    if (this.#db.available) return this.#db.history(sessionId)
-    // 降级：RPC（仅对本进程激活过的会话可用）
-    try {
-      const res = (await this.#conn.request('session/read', { sessionId, messageLimit: 400 }, 60_000)) as {
-        messages?: { info?: unknown; parts?: unknown[] }[]
+    // 首选：v4 rowsRange（官方 UI 投影，无需激活会话）
+    if (this.#conn.running) {
+      try {
+        const events: TimelineEvent[] = []
+        let beforeRowId: number | undefined
+        for (let page = 0; page < 6; page += 1) {
+          const res = (await this.#conn.requestUuid(
+            'v4/conversation/rowsRange',
+            { sessionId, clientMode: 'web-remote-replayable', limit: 200, ...(beforeRowId !== undefined ? { beforeRowId } : {}) },
+            30_000,
+          )) as { rows?: V4Row[]; hasMore?: boolean }
+          const rows = (res?.rows ?? []).slice().reverse() // rowsRange 返回按 rowId 升序
+          events.unshift(...rowsToEvents(rows))
+          if (!res?.hasMore || !rows.length) break
+          beforeRowId = rows[0]!.rowId
+        }
+        return events
+      } catch (e) {
+        warn('[zcode] rowsRange 读取失败，退回 SQLite', String(e).slice(0, 140))
       }
-      const out: TimelineEvent[] = []
-      for (const msg of res?.messages ?? []) out.push(...messageToEvents(msg as never))
-      return out
-    } catch {
-      return []
     }
+    if (this.#db.available) return this.#db.history(sessionId)
+    return []
   }
 
   subscribe(sessionId: string, cb: StreamCallback): () => void {
@@ -391,9 +424,54 @@ export class ZcodeAdapter implements HarnessAdapter {
     }
   }
 
+  async createSession(workspaceId: string, text: string): Promise<{ sessionId: string }> {
+    if (!this.#conn.running) throw new Error('app-server 未运行，无法新建任务')
+    const res = (await this.#conn.request(
+      'session/create',
+      {
+        workspace: { workspacePath: workspaceId, workspaceKey: workspaceId },
+        titleGenerationEnabled: true,
+        persistence: 'immediate',
+      },
+      60_000,
+    )) as Record<string, unknown>
+    const sessionId =
+      (typeof res?.sessionId === 'string' && res.sessionId) ||
+      ((res?.info as Record<string, unknown> | undefined)?.sessionId as string | undefined) ||
+      ((res?.session as Record<string, unknown> | undefined)?.sessionId as string | undefined)
+    if (!sessionId) throw new Error('创建会话失败：响应缺 sessionId')
+    await this.#refreshSessions()
+    this.#onIndexChanged()
+    if (text.trim()) {
+      try {
+        await this.#conn.request('session/send', { sessionId, content: text.trim() }, 30_000)
+      } catch (e) {
+        // 发送失败时回收刚建的会话，避免手机端产生"幽灵任务"
+        void this.#conn.request('session/close', { sessionId }, 10_000).catch(() => {})
+        throw friendlyControlError(e)
+      }
+    }
+    return { sessionId }
+  }
+
   async sendText(sessionId: string, text: string): Promise<void> {
     if (!this.#conn.running) throw new Error('app-server 未运行，无法发送')
-    await this.#conn.request('session/send', { sessionId, content: text }, 30_000)
+    try {
+      await this.#conn.request('session/send', { sessionId, content: text }, 30_000)
+    } catch (e) {
+      const msg = String(e)
+      // 会话未在本进程激活：先物化（resume）再重发一次
+      if (msg.includes('-32004') || msg.toLowerCase().includes('not active')) {
+        try {
+          await this.#conn.request('session/resume', { sessionId }, 60_000)
+          await this.#conn.request('session/send', { sessionId, content: text }, 30_000)
+          return
+        } catch (e2) {
+          throw friendlyControlError(e2)
+        }
+      }
+      throw friendlyControlError(e)
+    }
   }
 
   async stopSession(sessionId: string): Promise<void> {

@@ -24,6 +24,18 @@ async function main(): Promise<void> {
   const cwd = process.env.ZCODE_PROBE_CWD ?? os.homedir()
   console.log(`[probe] 启动 ${cmd}（cwd=${cwd}）`)
   await conn.start(cmd, ['app-server', '--stdio'], cwd, (line) => console.log(`[stderr] ${line.slice(0, 200)}`))
+  // 应答运行时偏好反向请求（桌面端宿主的行为；缺省会话物化会失败）
+  conn.onReverseRequest((method) => {
+    if (method === 'session/requestRuntimePreferences') {
+      return {
+        nativeSearchEnhancementsEnabled: true,
+        memoryEnabled: false,
+        askUserQuestionAutoResolutionEnabled: true,
+        modelContextBudgetStrategy: 'preflight-v1',
+      }
+    }
+    return {}
+  })
 
   const list = (await conn.request('session/list', { includeArchived: false, limit: 200 }, 30_000)) as {
     sessions?: Record<string, unknown>[]

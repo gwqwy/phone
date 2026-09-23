@@ -169,6 +169,14 @@ async function handleReq(
       return ok(next)
     }
 
+    case 'create': {
+      if (!requireAdapter(adapter, fail)) return
+      if (typeof adapter?.createSession !== 'function') return fail('not-implemented', '该 harness 不支持新建任务')
+      if (typeof p.workspaceId !== 'string' || typeof p.text !== 'string') return fail('bad-request', '参数不全')
+      const created = await adapter.createSession(p.workspaceId, p.text)
+      return ok(created)
+    }
+
     case 'send': {
       if (!requireAdapter(adapter, fail)) return
       if (typeof adapter?.sendText !== 'function') return fail('not-implemented', '该 harness 不支持发送')

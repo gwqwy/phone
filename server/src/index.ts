@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { DATA_DIR, lanAddresses, loadConfig, loadOrCreatePin, newSessionKey } from './config.ts'
-import { info, initLogFile } from './log.ts'
+import { info, initLogFile, warn } from './log.ts'
 import { AuthService } from './auth.ts'
 import { HarnessRegistry } from './core/harness.ts'
 import { MetaStore } from './core/meta.ts'
@@ -43,6 +43,13 @@ async function main(): Promise<void> {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+  // 协议异常的兜底：记录但不让整个服务进程退出
+  process.on('unhandledRejection', (reason) => {
+    warn('未处理的 Promise 拒绝（已兜底）', String(reason))
+  })
+  process.on('uncaughtException', (err) => {
+    warn('未捕获异常（已兜底）', String(err?.stack ?? err))
+  })
 }
 
 main().catch((e) => {

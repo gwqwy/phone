@@ -171,3 +171,126 @@ export function mapStatus(status: string | undefined): TimelineEvent['status'] |
       return 'unknown'
   }
 }
+
+// ---------- v4 conversation rows（官方 UI 投影层）→ 统一事件 ----------
+
+export interface V4Row {
+  kind?: string
+  rowId?: number
+  createdAt?: string | number
+  state?: string
+  status?: string
+  text?: string
+  toolName?: string
+  toolCallId?: string
+  approvalInteractionId?: string
+  durationMs?: number
+  inputText?: string
+  error?: { code?: string; message?: string }
+  files?: string[] | unknown
+  fileName?: string
+  [key: string]: unknown
+}
+
+function rowTs(row: V4Row): string {
+  const c = row.createdAt
+  if (typeof c === 'number') return new Date(c < 1e12 ? c * 1000 : c).toISOString()
+  if (typeof c === 'string') {
+    const t = new Date(c).getTime()
+    if (Number.isFinite(t)) return new Date(t).toISOString()
+  }
+  return new Date().toISOString()
+}
+
+function toolStatusOf(row: V4Row): EventStatus {
+  switch (row.status) {
+    case 'running':
+    case 'inputStreaming':
+      return 'running'
+    case 'pendingApproval':
+      return 'pending'
+    case 'error':
+      return 'error'
+    default:
+      return 'completed'
+  }
+}
+
+/** v4 conversation 行 → 统一时间线事件（与官方 UI 投影一致） */
+export function rowsToEvents(rows: V4Row[]): TimelineEvent[] {
+  const out: TimelineEvent[] = []
+  for (const row of rows) {
+    const id = `v4-${row.rowId ?? out.length}`
+    const ts = rowTs(row)
+    switch (row.kind) {
+      case 'userInput': {
+        const text = typeof row.text === 'string' ? row.text : ''
+        if (text.trim()) out.push({ id, kind: 'user', ts, text })
+        break
+      }
+      case 'assistantText': {
+        const text = typeof row.text === 'string' ? row.text : ''
+        if (text.trim()) {
+          out.push({ id, kind: 'text', ts, text, status: row.state === 'failed' ? 'error' : undefined })
+        }
+        break
+      }
+      case 'reasoning': {
+        const text = typeof row.text === 'string' ? row.text : ''
+        if (text.trim()) {
+          out.push({
+            id,
+            kind: 'think',
+            ts,
+            text,
+            status: row.state === 'streaming' ? 'running' : undefined,
+            meta: typeof row.durationMs === 'number' ? { durationSec: Math.round(row.durationMs / 100) / 10 } : undefined,
+          })
+        }
+        break
+      }
+      case 'toolCall': {
+        const tool = String(row.toolName ?? 'tool')
+        const status = toolStatusOf(row)
+        // 等待审批的工具调用渲染成审批卡
+        if (row.status === 'pendingApproval' && row.approvalInteractionId) {
+          out.push({
+            id,
+            kind: 'approval',
+            ts,
+            status: 'pending',
+            text: `审批：${tool}`,
+            meta: {
+              interactionId: String(row.approvalInteractionId),
+              kind: 'permission',
+              toolName: tool,
+              input: String(row.inputText ?? '').slice(0, 300),
+            },
+          })
+          break
+        }
+        const kind = toolKind(tool)
+        const meta: Record<string, unknown> = { tool }
+        const display = String(row.inputText ?? '').trim()
+        if (display) meta.cmd = display
+        if (row.error?.message) meta.error = String(row.error.message)
+        const text = display || tool
+        out.push({ id, kind, ts, status, text, meta })
+        break
+      }
+      case 'artifact': {
+        out.push({ id, kind: 'tool', ts, status: 'completed', text: `产物：${String(row.fileName ?? '')}`, meta: { tool: 'artifact' } })
+        break
+      }
+      case 'subagent':
+      case 'hookInvocation': {
+        out.push({ id, kind: 'tool', ts, status: 'completed', text: String((row as Record<string, unknown>).description ?? row.kind), meta: { tool: row.kind } })
+        break
+      }
+      default:
+        // turnHeader / timelineMarker 等暂不展示
+        break
+    }
+  }
+  return out
+}

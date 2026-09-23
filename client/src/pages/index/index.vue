@@ -3,12 +3,14 @@ import { computed, ref } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../components/NavBar.vue'
 import ThemePicker from '../../components/ThemePicker.vue'
+import CreateTaskSheet from '../../components/CreateTaskSheet.vue'
 import { api, conn, httpGet } from '../../api/client'
 import { applyIndex, index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
 import type { TaskSummary } from '../../api/types'
 
 const pickerVisible = ref(false)
+const createVisible = ref(false)
 
 let authTimer: ReturnType<typeof setInterval> | null = null
 
@@ -42,6 +44,11 @@ const counts = computed(() => `${index.workspaces.length} 个工作区 · ${inde
 const activeTasks = computed(() => index.tasks.filter((t) => !t.archived))
 
 const ws = computed(() => index.workspaces.map((w) => ({ ...w, tasks: index.tasks.filter((t) => t.workspaceId === w.id) })))
+const canCreate = computed(() => index.ready && (activeAdapter.value?.capabilities.createTask ?? false))
+
+function openCreated(sessionId: string): void {
+  uni.navigateTo({ url: `/pages/session/session?id=${encodeURIComponent(sessionId)}` })
+}
 
 const statusText: Record<string, string> = {
   running: '进行中',
@@ -85,7 +92,6 @@ function relativeTime(iso: string): string {
           适配器：{{ activeAdapter ? `${activeAdapter.label} · ${activeAdapter.ready ? '已就绪' : '未就绪'}` : '—' }}
         </text>
       </view>
-
       <view class="section-head">
         <text class="section-title">当前设备上的工作区和任务</text>
         <text class="section-count">{{ counts }}</text>
@@ -123,7 +129,18 @@ function relativeTime(iso: string): string {
       </view>
     </view>
 
+    <view class="fab" :class="{ disabled: !canCreate }" @tap="createVisible = true">
+      <text>＋</text>
+    </view>
+
     <ThemePicker :visible="pickerVisible" @close="pickerVisible = false" />
+    <CreateTaskSheet
+      :visible="createVisible"
+      :workspaces="index.workspaces"
+      :tasks="index.tasks"
+      @close="createVisible = false"
+      @created="openCreated"
+    />
   </view>
 </template>
 
@@ -131,6 +148,26 @@ function relativeTime(iso: string): string {
 .icon-btn {
   font-size: 20px;
   padding: 4px 8px;
+}
+.fab {
+  position: fixed;
+  right: 18px;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--zp-accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 300;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+}
+.fab.disabled {
+  opacity: 0.4;
 }
 .body {
   padding: 12px 14px 40px;

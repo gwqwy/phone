@@ -55,6 +55,7 @@ export interface CapabilitySet {
   approvals: boolean
   review: boolean
   terminal: boolean
+  createTask: boolean
 }
 
 export interface AdapterInfo {
