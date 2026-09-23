@@ -8,7 +8,7 @@ onLaunch(() => {
 </script>
 
 <style>
-@import './theme/theme.scss';
+@import './theme/theme.css';
 
 page {
   background-color: var(--zp-bg);

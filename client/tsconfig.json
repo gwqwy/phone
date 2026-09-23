@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "allowJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "lib": ["esnext", "dom"],
+    "types": ["@dcloudio/types"]
+  },
+  "include": ["**/*.ts", "**/*.d.ts", "**/*.vue"]
+}

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { DATA_DIR, lanAddresses, loadConfig, loadOrCreatePin, newSessionKey } from './config.ts'
-import { info, initLogFile, warn } from './log.ts'
+import { error, info, initLogFile, warn } from './log.ts'
 import { AuthService } from './auth.ts'
 import { HarnessRegistry } from './core/harness.ts'
 import { MetaStore } from './core/meta.ts'
@@ -36,10 +36,23 @@ async function main(): Promise<void> {
   const server = createServer(createHandler({ config, auth, registry, version: VERSION }))
   attachWs(server, { auth, registry, meta })
 
+  // 端口被占（比如双开了服务）自动 +1 顺延，最多 10 次
+  let boundPort = config.port
+  server.on('error', (e: NodeJS.ErrnoException) => {
+    if (e.code === 'EADDRINUSE' && boundPort < config.port + 10) {
+      warn(`端口 ${boundPort} 被占用，尝试 ${boundPort + 1}`)
+      boundPort += 1
+      server.listen(boundPort, config.host)
+    } else {
+      error(`服务监听失败：${e.message}`)
+      process.exit(1)
+    }
+  })
+
   server.listen(config.port, config.host, () => {
     info(`zcode phone server v${VERSION}`)
-    info(`  本机:   http://127.0.0.1:${config.port}`)
-    for (const ip of lanAddresses()) info(`  局域网: http://${ip}:${config.port}`)
+    info(`  本机:   http://127.0.0.1:${boundPort}`)
+    for (const ip of lanAddresses()) info(`  局域网: http://${ip}:${boundPort}`)
     info(`  PIN: ${pin}   （数据目录 ${DATA_DIR}）`)
   })
 

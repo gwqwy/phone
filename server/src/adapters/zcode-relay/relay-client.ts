@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto'
-import { warn } from '../../log.ts'
+import { info, warn } from '../../log.ts'
 
 /**
  * 官方中继客户端（协议细节见 docs/relay-protocol.md，均经 bundle 逆向 + 实测验证）。
@@ -268,7 +268,12 @@ export class RelayClient {
         clearTimeout(timer)
         resolve(frame)
       }
-      this.sendRaw({ zcode_type: 'bootstrap-request', requestId: this.#bootstrapReqId })
+      // bootstrap 走 data.payload 的内层 JSON 形态（裸发顶层帧会被中继拒绝 WRONG_PARAM）
+      this.sendRaw({
+        type: 'data',
+        payload: { zcode_type: 'bootstrap-request', requestId: this.#bootstrapReqId },
+        client_ts: Date.now(),
+      })
       info(`[relay][v4] → bootstrap-request（reqId=${this.#bootstrapReqId}）`)
     })
   }
@@ -276,7 +281,12 @@ export class RelayClient {
   #onData(payload: unknown): void {
     if (!payload || typeof payload !== 'object') return
     const p = payload as Record<string, unknown>
-    if (p.zcode_type !== 'rpc-frame') return
+    // data.payload 的两种形态：rpc-frame（二进制内层）或内层 JSON 信封（bootstrap 等）
+    if (p.zcode_type !== 'rpc-frame') {
+      const zt = typeof p.zcode_type === 'string' ? p.zcode_type : ''
+      if (zt) this.#onInnerJson(p)
+      return
+    }
     const seq = Number(p.seq ?? 0)
     // 入站确认
     this.sendRaw({

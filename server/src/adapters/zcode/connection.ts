@@ -62,6 +62,9 @@ export class AppServerConnection {
 
       proc.on('exit', (code) => {
         info(`[zcode] app-server 进程退出（code=${code}）`)
+        if (code !== 0 && code !== null) {
+          warn(`[zcode] app-server 异常退出 code=${code}——常见原因：另一个 zphone/app-server 实例占用了 ~/.zcode 数据库，或 CLI 报配置错误（见上方 [zcode:server] stderr 行）`)
+        }
         this.#rejectAll('app-server 进程已退出')
         this.#handleExit()
         if (!settled) {

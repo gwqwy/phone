@@ -26,6 +26,12 @@
 5. 心跳/查询：`{type:"pair_status_query", device_sid, client_ts}`（注意：单独发即被 `KICKED`，
    疑似须与官方客户端的状态机时序配合——实现时按官方前端时序或完全模拟）
 6. 数据帧：`{type:"data", payload:…}`（见下）；错误 `{type:"error", code, message}`。
+7. **data.payload 的两种形态**（实测确认）：
+   - `rpc-frame`：`{zcode_type:'rpc-frame', bridgeSessionId, bridgeGeneration, recoveryId, seq, dataBase64}`
+   - 内层 JSON 信封：`{zcode_type:'bootstrap-request'|'bootstrap-response'|'platform-request'|…, requestId, …}`
+     —— **bootstrap 必须走此形态**；裸发顶层帧（无 type/data 包裹）会被中继拒绝 `WRONG_PARAM` 并断链（实测）。
+   - 配对后应答第一个动作：`{type:'data', payload:{zcode_type:'bootstrap-request', requestId}}` →
+     桌面端回 `{type:'data', payload:{zcode_type:'bootstrap-response', requestId, result}}`。
 
 ## 3. 数据面信封（data 帧，外层已确认）
 
@@ -66,6 +72,8 @@
 | 2026-09-23 | auth_ack + `waiting`（桌面腿离线，链接为旧配对） |
 | 2026-09-23 | 发 `pair_status_query` 后被 `KICKED`（时序/占用，待实现时按官方状态机处理） |
 | 2026-09-23 | 复连后 `auth_ack + pair_status="matched"`（桌面腿在线）✅ |
+| 2026-09-23 | matched 后裸发顶层 `bootstrap-request` → `WRONG_PARAM` + 断链；已修正为 data.payload 内层 JSON 形态 |
+| 2026-09-23 | 桌面腿随「远程控制」页面开关浮动（matched↔waiting）；官方页面在线会挤占同一 sid（KICKED 根因） |
 
 ## 6. 落地形态（建议）
 
