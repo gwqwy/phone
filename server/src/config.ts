@@ -16,6 +16,8 @@ export interface AppConfig {
   clientDist: string
   /** zcode CLI 路径；留空则自动探测（桌面端内置 glm/zcode.cjs 或 PATH 中的 zcode） */
   zcodeCommand: string
+  /** app-server 的工作目录（决定其读取的存储），默认用户主目录 */
+  zcodeCwd: string
 }
 
 const DEFAULTS: AppConfig = {
@@ -23,6 +25,7 @@ const DEFAULTS: AppConfig = {
   host: '0.0.0.0',
   clientDist: path.join(PROJECT_ROOT, 'client', 'dist', 'build', 'h5'),
   zcodeCommand: '',
+  zcodeCwd: '',
 }
 
 export function loadConfig(): AppConfig {

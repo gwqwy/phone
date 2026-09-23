@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-09-23T03:24:47.597Z",
+  "recordedAt": "2026-09-23T03:53:58.394Z",
   "sessionId": "sess_ca394e23-5e8b-4d0c-b99a-f3e28f7fbfc1",
   "event": "PostToolUse",
-  "toolName": "Edit",
-  "file": "client/src/pages/index/index.vue",
-  "outcome": "clear",
-  "coverage": "complete",
+  "toolName": "Write",
+  "file": "server/scripts/probe-settings.ts",
+  "outcome": "inconclusive",
+  "coverage": "partial",
   "findingCount": 0,
-  "durationMs": 3,
+  "durationMs": 10043,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

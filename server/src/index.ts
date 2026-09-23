@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   const registry = new HarnessRegistry()
   const meta = new MetaStore(DATA_DIR)
 
-  const zcode = new ZcodeAdapter(config)
+  const zcode = new ZcodeAdapter(config, () => registry.notifyIndexChanged())
   registry.register(zcode, true)
   zcode
     .start()

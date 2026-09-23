@@ -6,3 +6,4 @@ server/dist/
 client/dist/
 client/unpackage/
 .DS_Store
+".probe/"  
