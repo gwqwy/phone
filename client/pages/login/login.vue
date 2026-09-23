@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { httpGet, httpPost } from '../../api/client'
+import { httpGet, httpPost, ensureHttpBase } from '../../api/client'
 import { themeClass } from '../../theme/theme'
 
 const pin = ref('')
@@ -16,13 +16,19 @@ onLoad((options) => {
 
 async function bootstrap(autoPin: string): Promise<void> {
   try {
-    const res = await httpGet<{ ok: boolean }>('/api/bootstrap')
-    if (res.statusCode === 200) {
+    await ensureHttpBase()
+    const res = await httpGet<{ ok?: boolean }>('/api/bootstrap')
+    // 仅认服务的 JSON（200 但返回 HTML 说明 dev 代理缺失且直连未就绪）
+    if (res.statusCode === 200 && res.data && (res.data as { ok?: boolean }).ok === true) {
       enter()
       return
     }
     if (res.statusCode === 401 && autoPin) {
       await login(autoPin)
+      return
+    }
+    if (res.statusCode !== 401) {
+      error.value = '无法连接桌面服务，请确认电脑端已启动'
     }
   } catch {
     error.value = '无法连接桌面服务，请确认电脑端已启动'

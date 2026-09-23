@@ -4,7 +4,7 @@ import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../components/NavBar.vue'
 import TimelineRow from '../../components/TimelineRow.vue'
 import SidePanel from '../../components/SidePanel.vue'
-import { api, conn, httpGet } from '../../api/client'
+import { api, conn, httpGet, ensureHttpBase } from '../../api/client'
 import { index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
 import type { TimelineEvent } from '../../api/types'
@@ -34,7 +34,10 @@ onLoad((options) => {
     loading.value = false
     return
   }
-  void checkAuth()
+  void (async () => {
+    await ensureHttpBase()
+    await checkAuth()
+  })()
   subOpen = true
   api.subscribe('session', 'session-stream', { sessionId: sessionId.value }, (kind, data) => {
     if (!subOpen) return

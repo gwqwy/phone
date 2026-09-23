@@ -62,8 +62,15 @@ class Api {
     this.#pending.clear()
   }
 
+  #directWs = false // HBuilderX dev(5173) 无代理时直连 3930 的兜底开关
+
   #url(): string {
     // #ifdef H5
+    const host = location.hostname
+    const isLoop = host === 'localhost' || host === '127.0.0.1'
+    if (this.#directWs && isLoop && location.port !== '3930') {
+      return `ws://${host}:3930/ws`
+    }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     return `${proto}://${location.host}/ws`
     // #endif
@@ -140,6 +147,17 @@ class Api {
     this.#teardown()
     if (this.#closedByUser) return
     conn.retryCount += 1
+    // HBuilderX dev（5173 等非 3930 端口、回环主机）连续失败后切直连 3930
+    // #ifdef H5
+    {
+      const host = location.hostname
+      const isLoop = host === 'localhost' || host === '127.0.0.1'
+      if (!this.#directWs && conn.retryCount >= 2 && isLoop && location.port !== '3930') {
+        this.#directWs = true
+        console.warn('[zp] 开发模式：WS 改为直连 3930')
+      }
+    }
+    // #endif
     const delay = Math.min(this.#backoff * Math.pow(1.6, conn.retryCount - 1), MAX_BACKOFF)
     this.#reconnectTimer = setTimeout(() => this.#open(), delay + Math.random() * 400)
     if (wasConnected || conn.retryCount <= 1) {
@@ -188,13 +206,40 @@ interface HttpResult<T> {
   data: T
 }
 
+// 开发兜底：HBuilderX dev 无代理时直连 3930（仅回环主机，需服务端放行回环 CORS）
+let httpBase = ''
+
+/** 探测是否需要直连 3930（HBuilderX dev 场景；幂等，页面加载早期调用一次） */
+export async function ensureHttpBase(): Promise<void> {
+  // #ifdef H5
+  if (httpBase) return
+  const host = location.hostname
+  const isLoop = host === 'localhost' || host === '127.0.0.1'
+  if (!isLoop || !location.port || location.port === '3930') return
+  const candidate = `http://${host}:3930`
+  const ok = await new Promise<boolean>((resolve) => {
+    uni.request({
+      url: candidate + '/api/bootstrap',
+      timeout: 3000,
+      success: (r) => resolve(r.statusCode === 200 || r.statusCode === 401),
+      fail: () => resolve(false),
+    })
+  })
+  if (ok) {
+    httpBase = candidate
+    console.warn('[zp] 开发模式：HTTP 直连 ' + candidate)
+  }
+  // #endif
+}
+
 function http<T>(method: 'GET' | 'POST', url: string, data?: unknown): Promise<HttpResult<T>> {
   return new Promise((resolve, reject) => {
     uni.request({
-      url,
+      url: httpBase + url,
       method,
       data: data as Record<string, unknown> | undefined,
       timeout: 10_000,
+      withCredentials: true,
       success: (res) => resolve({ statusCode: res.statusCode ?? 0, data: res.data as T }),
       fail: (err) => reject(new Error(err.errMsg ?? '网络错误')),
     })

@@ -34,6 +34,30 @@ async function route(req: IncomingMessage, res: ServerResponse, ctx: HttpCtx): P
   const pathname = decodeURIComponent(url.pathname)
   const level = effectiveLevel(req.headers.host, req.socket.remoteAddress)
 
+  // 回环开发来源的 CORS（HBuilderX dev 直连兜底）；公网/局域网来源一律不放行
+  if (pathname.startsWith('/api/') && req.headers.origin) {
+    const origin = String(req.headers.origin)
+    try {
+      const o = new URL(origin)
+      if (o.protocol === 'http:' && (o.hostname === 'localhost' || o.hostname === '127.0.0.1' || o.hostname === '::1')) {
+        res.setHeader('access-control-allow-origin', origin)
+        res.setHeader('access-control-allow-credentials', 'true')
+        res.setHeader('vary', 'origin')
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'access-control-allow-methods': 'GET, POST, OPTIONS',
+            'access-control-allow-headers': 'content-type',
+            'access-control-max-age': '600',
+          })
+          res.end()
+          return
+        }
+      }
+    } catch {
+      // 非法 Origin 按无 CORS 处理
+    }
+  }
+
   if (pathname === '/api/login' && req.method === 'POST') return ctx.auth.loginHandler(req, res)
   if (pathname === '/api/logout' && req.method === 'POST') return ctx.auth.logoutHandler(req, res)
 

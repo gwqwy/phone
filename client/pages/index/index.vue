@@ -5,7 +5,7 @@ import NavBar from '../../components/NavBar.vue'
 import ThemePicker from '../../components/ThemePicker.vue'
 import CreateTaskSheet from '../../components/CreateTaskSheet.vue'
 import TaskContextMenu from '../../components/TaskContextMenu.vue'
-import { api, conn, httpGet } from '../../api/client'
+import { api, conn, httpGet, ensureHttpBase } from '../../api/client'
 import { applyIndex, index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
 import type { TaskSummary } from '../../api/types'
@@ -59,7 +59,10 @@ async function onMenuAction(action: string): Promise<void> {
 let authTimer: ReturnType<typeof setInterval> | null = null
 
 onLoad(() => {
-  void checkAuth()
+  void (async () => {
+    await ensureHttpBase()
+    await checkAuth()
+  })()
   api.connect()
   api.subscribe('index', 'sessions-index', undefined, (kind, data) => applyIndex(kind, data))
   // 服务端重启会使 cookie 失效（sessionKey 轮换），定时探测并回登录页
