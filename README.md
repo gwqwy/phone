@@ -92,6 +92,10 @@ npm test             # 服务端单测
 
 ## 路线图
 
+- [ ] **中继直连模式（进行中）**：凭桌面端配对链接直连官方中继 `wss://zcode.z.ai/ws`——
+      认证握手已逆向并实测打通（`auth_ack` + `pair_status=matched`），协议笔记见
+      [docs/relay-protocol.md](docs/relay-protocol.md)。完成后远程发送/审批将走桌面端自身
+      账号执行，是解锁控制面的最优路径
 - [ ] Cloudflare Tunnel 公网访问（移植 dsh-pocket 的 cloudflared 方案）
 - [ ] 交互式终端 tab（复用 ZCode terminal-client 通道）
 - [ ] DeepSeek Harness 适配器（按 template/ 注释稿）
