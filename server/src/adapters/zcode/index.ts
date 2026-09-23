@@ -475,7 +475,9 @@ export class ZcodeAdapter implements HarnessAdapter {
           if (!res?.hasMore || !rows.length) break
           beforeRowId = rows[0]!.rowId
         }
-        return events
+        // rowsRange 对部分会话可能返回空（投影未物化），此时必须落到 SQLite
+        info(`[zcode] rowsRange ${sessionId.slice(0, 12)}… rows=${res?.rows?.length ?? '?'} → 事件 ${events.length}`)
+        if (events.length) return events
       } catch (e) {
         warn('[zcode] rowsRange 读取失败，退回 SQLite', String(e).slice(0, 140))
       }

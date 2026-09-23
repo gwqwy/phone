@@ -110,6 +110,7 @@ interface TurnGroup {
   work: TimelineEvent[]
   texts: TimelineEvent[]
   approvals: TimelineEvent[]
+  duration?: string
 }
 
 const turnGroups = computed<TurnGroup[]>(() => {
@@ -133,10 +134,18 @@ const turnGroups = computed<TurnGroup[]>(() => {
     else if (ev.kind === 'text') g.texts.push(ev)
     g.work.push(ev)
   }
-  // 每轮只展示最后一条 AI 文本，其余进折叠区
+  // 每轮只展示最后一条 AI 文本，其余进折叠区；折叠条标注工作时长
   for (const g of groups) {
     const lastText = g.texts[g.texts.length - 1]
     if (lastText) g.work = g.work.filter((e) => e.id !== lastText.id)
+    const stamps = [g.user?.ts, ...g.work.map((e) => e.ts), ...g.texts.map((e) => e.ts)].filter(Boolean)
+    if (stamps.length >= 2) {
+      const ms = new Date(stamps[stamps.length - 1]!).getTime() - new Date(stamps[0]!).getTime()
+      if (ms > 1000) {
+        const s = Math.round(ms / 1000)
+        g.duration = s >= 60 ? `已工作 ${Math.floor(s / 60)} 分 ${s % 60} 秒` : `已工作 ${s} 秒`
+      }
+    }
   }
   return groups
 })
@@ -204,7 +213,7 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
             @resolve="(o) => resolve(a.id, o)"
           />
           <view v-if="g.work.length" class="turn-collapse" @tap="() => toggleTurn(g.turn)">
-            <text class="turn-collapse-label">{{ expandedTurns.has(g.turn) ? '收起执行过程' : `执行过程 · ${g.work.length} 步` }}</text>
+            <text class="turn-collapse-label">{{ expandedTurns.has(g.turn) ? '收起执行过程' : `执行过程 · ${g.work.length} 步${g.duration ? ' · ' + g.duration : ''}` }}</text>
           </view>
           <view v-if="expandedTurns.has(g.turn)">
             <TimelineRow v-for="ev in g.work" :key="ev.id" :ev="ev" />
