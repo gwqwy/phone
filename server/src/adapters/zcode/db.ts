@@ -134,6 +134,41 @@ export class ZcodeDbReader {
     return rows?.[0]?.m ?? 0
   }
 
+  /** 审查数据：会话级增删统计 + 涉及的文件清单（来自编辑类工具调用） */
+  review(sessionId: string): { additions: number; deletions: number; files: string[] } {
+    const s = this.query<{ summary_additions: number | null; summary_deletions: number | null; summary_files: number | null }>(
+      'SELECT summary_additions, summary_deletions, summary_files FROM session WHERE id = ?',
+      sessionId,
+    )
+    const parts = this.query<{ data: string }>(
+      'SELECT data FROM part WHERE session_id = ? ORDER BY rowid DESC LIMIT 2000',
+      sessionId,
+    )
+    const files: string[] = []
+    const seen = new Set<string>()
+    for (const p of parts ?? []) {
+      try {
+        const part = JSON.parse(p.data) as { type?: string; tool?: string; state?: { input?: Record<string, unknown> } }
+        if (part.type !== 'tool') continue
+        const tool = (part.tool ?? '').toLowerCase()
+        if (tool !== 'edit' && tool !== 'write' && tool !== 'multiedit' && tool !== 'replace') continue
+        const input = part.state?.input ?? {}
+        const file = input['file_path'] ?? input['filePath'] ?? input['path']
+        if (typeof file === 'string' && file && !seen.has(file)) {
+          seen.add(file)
+          files.push(file)
+        }
+      } catch {
+        // 跳过坏行
+      }
+    }
+    return {
+      additions: s?.[0]?.summary_additions ?? 0,
+      deletions: s?.[0]?.summary_deletions ?? 0,
+      files,
+    }
+  }
+
   /** 轮询增量：比 sinceRowId 新的部件（带消息角色） */
   partsSince(sessionId: string, sinceRowId: number): { rowid: number; event: TimelineEvent }[] {
     const rows = this.query<{ rowid: number; message_id: string; data: string; mdata: string }>(

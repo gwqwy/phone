@@ -3,7 +3,8 @@ import { computed, nextTick, ref } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../components/NavBar.vue'
 import TimelineRow from '../../components/TimelineRow.vue'
-import { api, conn } from '../../api/client'
+import SidePanel from '../../components/SidePanel.vue'
+import { api, conn, httpGet } from '../../api/client'
 import { index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
 import type { TimelineEvent } from '../../api/types'
@@ -15,6 +16,7 @@ const loadError = ref('')
 const input = ref('')
 const sending = ref(false)
 const scrollInto = ref('')
+const panelVisible = ref(false)
 
 const task = computed(() => index.tasks.find((t) => t.id === sessionId.value))
 const title = computed(() => task.value?.alias || task.value?.title || '任务会话')
@@ -32,12 +34,27 @@ onLoad((options) => {
     loading.value = false
     return
   }
+  void checkAuth()
   subOpen = true
   api.subscribe('session', 'session-stream', { sessionId: sessionId.value }, (kind, data) => {
     if (!subOpen) return
     handleFrame(kind, data)
   })
+  // 进入会话即清除未读标记
+  void api.request('meta.set', { sessionId: sessionId.value, patch: { unread: false } }).catch(() => {})
 })
+
+async function checkAuth(): Promise<void> {
+  try {
+    const res = await httpGet<{ ok: boolean }>('/api/bootstrap')
+    if (res.statusCode === 401) {
+      api.close()
+      uni.reLaunch({ url: '/pages/login/login' })
+    }
+  } catch {
+    // 网络抖动不处理
+  }
+}
 
 onUnload(() => {
   subOpen = false
@@ -117,6 +134,7 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
     <NavBar :title="title" :back="true" @back="() => uni.navigateBack()">
       <template #right>
         <text v-if="running && canStop" class="stop-btn" @tap="stopTask">停止</text>
+        <text class="panel-btn" @tap="panelVisible = true">▤</text>
       </template>
     </NavBar>
 
@@ -148,10 +166,16 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
         <text>↑</text>
       </view>
     </view>
+    <SidePanel :visible="panelVisible" :session-id="sessionId" @close="panelVisible = false" />
   </view>
 </template>
 
 <style scoped>
+.panel-btn {
+  color: var(--zp-text-dim);
+  font-size: 18px;
+  padding: 4px 8px;
+}
 .stop-btn {
   color: var(--zp-err);
   font-size: 13px;

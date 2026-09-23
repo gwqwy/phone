@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { onLoad, onUnload } from '@dcloudio/uni-app'
+import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app'
 import NavBar from '../../components/NavBar.vue'
 import ThemePicker from '../../components/ThemePicker.vue'
 import CreateTaskSheet from '../../components/CreateTaskSheet.vue'
+import TaskContextMenu from '../../components/TaskContextMenu.vue'
 import { api, conn, httpGet } from '../../api/client'
 import { applyIndex, index } from '../../store/app'
 import { themeClass } from '../../theme/theme'
@@ -11,6 +12,49 @@ import type { TaskSummary } from '../../api/types'
 
 const pickerVisible = ref(false)
 const createVisible = ref(false)
+const menuTask = ref<TaskSummary | null>(null)
+
+function openMenu(t: TaskSummary): void {
+  menuTask.value = t
+}
+
+async function metaSet(sessionId: string, patch: Record<string, unknown>): Promise<void> {
+  try {
+    await api.request('meta.set', { sessionId, patch })
+  } catch (e) {
+    uni.showToast({ title: String((e as Error).message ?? '操作失败').slice(0, 30), icon: 'none' })
+  }
+}
+
+async function onMenuAction(action: string): Promise<void> {
+  const t = menuTask.value
+  if (!t) return
+  const wsPath = index.workspaces.find((w) => w.id === t.workspaceId)?.path
+  if (action === 'pin') return metaSet(t.id, { pinned: !t.pinned })
+  if (action === 'archive') return metaSet(t.id, { archived: !t.archived })
+  if (action === 'unread') return metaSet(t.id, { unread: !t.unread })
+  if (action === 'rename') {
+    uni.showModal({
+      title: '重命名任务',
+      editable: true,
+      placeholderText: t.alias || t.title,
+      success: (res) => {
+        if (res.confirm) {
+          const v = (res.content ?? '').trim()
+          void metaSet(t.id, { alias: v || undefined })
+        }
+      },
+    })
+    return
+  }
+  if (action === 'copyPath' && wsPath) {
+    uni.setClipboardData({ data: wsPath })
+    return
+  }
+  if (action === 'copyId') {
+    uni.setClipboardData({ data: t.id })
+  }
+}
 
 let authTimer: ReturnType<typeof setInterval> | null = null
 
@@ -25,6 +69,13 @@ onLoad(() => {
 onUnload(() => {
   api.unsubscribe('index')
   if (authTimer) clearInterval(authTimer)
+})
+
+onPullDownRefresh(() => {
+  // 重新订阅触发服务端推送全量快照
+  api.unsubscribe('index')
+  api.subscribe('index', 'sessions-index', undefined, (kind, data) => applyIndex(kind, data))
+  setTimeout(() => uni.stopPullDownRefresh(), 2500)
 })
 
 async function checkAuth(): Promise<void> {
@@ -114,9 +165,11 @@ function relativeTime(iso: string): string {
             :key="t.id"
             class="task-row"
             @tap="() => openTask(t)"
+            @longpress="() => openMenu(t)"
           >
             <text class="task-name">{{ t.alias || t.title || '未命名任务' }}</text>
             <view class="task-meta">
+              <text v-if="t.unread" class="unread-dot">●</text>
               <text class="task-time">{{ relativeTime(t.updatedAt) }}</text>
               <text class="task-status" :class="`st-${t.status}`">{{ statusText[t.status] ?? '—' }}</text>
             </view>
@@ -134,6 +187,12 @@ function relativeTime(iso: string): string {
     </view>
 
     <ThemePicker :visible="pickerVisible" @close="pickerVisible = false" />
+    <TaskContextMenu
+      :visible="menuTask !== null"
+      :task="menuTask"
+      @close="menuTask = null"
+      @action="onMenuAction"
+    />
     <CreateTaskSheet
       :visible="createVisible"
       :workspaces="index.workspaces"
@@ -265,8 +324,12 @@ function relativeTime(iso: string): string {
 .task-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-left: 10px;
+}
+.unread-dot {
+  color: var(--zp-accent);
+  font-size: 10px;
 }
 .task-time {
   font-size: 11px;

@@ -34,7 +34,7 @@ export interface HarnessAdapter {
   /** 在指定工作区新建任务并发送首条输入（harness 需自行管理其运行时激活） */
   createSession?(workspaceId: string, text: string): Promise<{ sessionId: string }>
   /** 审查面板：该会话的代码变更汇总 */
-  review?(sessionId: string): Promise<{ files: { path: string; added: number; removed: number }[] }>
+  review?(sessionId: string): Promise<{ additions: number; deletions: number; files: string[] }>
 }
 
 type IndexListener = () => void

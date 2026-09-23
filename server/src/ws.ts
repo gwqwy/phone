@@ -177,6 +177,13 @@ async function handleReq(
       return ok(created)
     }
 
+    case 'review': {
+      if (!requireAdapter(adapter, fail)) return
+      if (typeof adapter?.review !== 'function') return fail('not-implemented', '该 harness 不支持审查')
+      if (typeof p.sessionId !== 'string') return fail('bad-request', '缺 sessionId')
+      return ok(await adapter.review(p.sessionId))
+    }
+
     case 'send': {
       if (!requireAdapter(adapter, fail)) return
       if (typeof adapter?.sendText !== 'function') return fail('not-implemented', '该 harness 不支持发送')

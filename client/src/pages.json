@@ -6,7 +6,11 @@
     },
     {
       "path": "pages/index/index",
-      "style": { "navigationStyle": "custom" }
+      "style": {
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true,
+        "backgroundTextStyle": "dark"
+      }
     },
     {
       "path": "pages/session/session",

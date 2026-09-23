@@ -497,6 +497,11 @@ export class ZcodeAdapter implements HarnessAdapter {
     })
   }
 
+  async review(sessionId: string): Promise<{ additions: number; deletions: number; files: string[] }> {
+    if (this.#db.available) return this.#db.review(sessionId)
+    return { additions: 0, deletions: 0, files: [] }
+  }
+
   async stop(): Promise<void> {
     this.#closed = true
     this.#ready = false
