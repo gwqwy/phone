@@ -68,7 +68,8 @@ class Api {
     // #ifdef H5
     const host = location.hostname
     const isLoop = host === 'localhost' || host === '127.0.0.1'
-    if (this.#directWs && isLoop && location.port !== '3930') {
+    // HBuilderX dev（非 3930 端口）没有 /ws 代理，vite 对未知升级会永久挂起——直接连服务端口
+    if (isLoop && location.port !== '3930') {
       return `ws://${host}:3930/ws`
     }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
