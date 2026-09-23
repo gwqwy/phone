@@ -9,7 +9,7 @@ ws.on('open', () => {
 ws.on('message', (raw) => {
   const f = JSON.parse(String(raw)) as { t: string; id?: string; ok?: boolean; data?: unknown; error?: { message?: string } }
   if (f.t === 'res' && f.id === 'h1') {
-    const events = (f.data as { events?: { kind: string; text?: string }[] })?.events ?? []
+    const events = (Array.isArray(f.data) ? f.data : (f.data as { events?: { kind: string; text?: string }[] })?.events) ?? []
     const hist: Record<string, number> = {}
     for (const e of events) hist[e.kind] = (hist[e.kind] ?? 0) + 1
     console.log(`事件总数 ${events.length}，分布 ${JSON.stringify(hist)}`)

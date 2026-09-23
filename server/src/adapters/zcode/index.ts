@@ -464,6 +464,7 @@ export class ZcodeAdapter implements HarnessAdapter {
       try {
         const events: TimelineEvent[] = []
         let beforeRowId: number | undefined
+        let totalRows = 0
         for (let page = 0; page < 6; page += 1) {
           const res = (await this.#conn.requestUuid(
             'v4/conversation/rowsRange',
@@ -471,12 +472,13 @@ export class ZcodeAdapter implements HarnessAdapter {
             30_000,
           )) as { rows?: V4Row[]; hasMore?: boolean }
           const rows = res?.rows ?? [] // rowId 升序（本页为当前已知的最新段）
+          totalRows += rows.length
           events.unshift(...rowsToEvents(rows))
           if (!res?.hasMore || !rows.length) break
           beforeRowId = rows[0]!.rowId
         }
         // rowsRange 对部分会话可能返回空（投影未物化），此时必须落到 SQLite
-        info(`[zcode] rowsRange ${sessionId.slice(0, 12)}… rows=${res?.rows?.length ?? '?'} → 事件 ${events.length}`)
+        info(`[zcode] rowsRange ${sessionId.slice(0, 12)}… rows=${totalRows} → 事件 ${events.length}`)
         if (events.length) return events
       } catch (e) {
         warn('[zcode] rowsRange 读取失败，退回 SQLite', String(e).slice(0, 140))
