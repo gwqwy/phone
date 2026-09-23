@@ -24,6 +24,46 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
   #config: AppConfig
   #onIndexChanged: () => void
   #v4LogCount = 0
+  #workspaces: Workspace[] = []
+  #activeWorkspaceKey = ''
+  #activeTaskId = ''
+  #bridge: Record<string, unknown> | null = null
+
+  /** 阶段一：bootstrap → workspace-list → bridge-open（为阶段二 RPC 拿桥接身份） */
+  async #probePhaseOne(): Promise<void> {
+    const boot = await this.#client?.requestBootstrap()
+    if (boot) {
+      const result = (boot.result ?? {}) as Record<string, unknown>
+      const view = (result.initialViewState ?? {}) as Record<string, unknown>
+      this.#activeWorkspaceKey = String(view.activeWorkspaceKey ?? result.activeWorkspaceKey ?? '')
+      this.#activeTaskId = String(view.activeTaskId ?? result.activeTaskId ?? '')
+    }
+    const list = await this.#client?.requestWorkspaceList()
+    if (list) {
+      const items = (list.result ?? list.workspaces ?? []) as Record<string, unknown>[]
+      if (Array.isArray(items) && items.length) {
+        this.#workspaces = items
+          .map((w) => ({
+            id: String(w.workspaceKey ?? w.workspacePath ?? w.path ?? ''),
+            name: String(w.name ?? w.workspaceName ?? w.workspacePath ?? '').split(/[\\/]/).pop() ?? '',
+            path: String(w.workspacePath ?? w.path ?? ''),
+          }))
+          .filter((w) => w.id)
+        info(`[relay] 工作区列表：${this.#workspaces.length} 个`)
+      } else {
+        info(`[relay] workspace-list 响应形态：${JSON.stringify(list).slice(0, 300)}`)
+      }
+    }
+    const key = this.#activeWorkspaceKey || this.#workspaces[0]?.id
+    if (key) {
+      const bridge = await this.#client?.openBridge(key, this.#activeTaskId || undefined)
+      if (bridge) {
+        this.#bridge = (bridge.bridge ?? bridge) as Record<string, unknown>
+        info(`[relay] 桥接就绪：${JSON.stringify(this.#bridge).slice(0, 200)}`)
+      }
+    }
+    this.#onIndexChanged()
+  }
 
   constructor(config: AppConfig, onIndexChanged: () => void) {
     this.#config = config
@@ -58,8 +98,8 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
         if (state === 'matched') {
           this.#ready = true
           this.#onIndexChanged()
-          // 配对成功即发起 bootstrap 实证（官方 mobile 前端的第一条内层消息）
-          void this.#client?.requestBootstrap()
+          // 配对成功即跑阶段一探测：bootstrap → 工作区列表 → 桥接建立
+          void this.#probePhaseOne()
         } else if (state === 'closed' || state === 'waiting') {
           if (this.#ready && state === 'closed') {
             this.#ready = false

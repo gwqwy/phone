@@ -76,12 +76,36 @@
 | 2026-09-23 | 桌面腿随「远程控制」页面开关浮动（matched↔waiting）；官方页面在线会挤占同一 sid（KICKED 根因） |
 | 2026-09-23 | **bootstrap-response 成功到达** ✅：`{result:{desktopAppVersion, initialViewState, activeTaskId, activeWorkspaceKey, …}}` —— 内层确认就是 **zcode_type JSON 信封**；桌面端还会主动推送状态更新。数据面即 `bootstrap/platform-request` 通道，无需 VSCode RPC 栈。（clientHello NDJSON 无响应，非必要） |
 
-## 9. 下一步（zcode-relay 数据面收尾）
+## 9. 数据面两段式协议（2026-09-23 从 bundle 完整还原）
 
-1. 解析 `bootstrap-response.result`（initialViewState：工作区/任务/活跃会话）
-2. 探测 `platform-request` 的可用 method（任务列表刷新、会话消息读取、发送输入）
-3. 映射到统一协议（TaskSummary/TimelineEvent），与 zcode 适配器共用手机端 UI
-4. `v4command`（sendText/stop/resolveInteraction）作为写路径
+官方 mobile 前端与桌面端的通道分两段：
+
+**阶段一 · JSON 信封（已验证可用）**
+| 请求 | 响应 | 说明 |
+|---|---|---|
+| `bootstrap-request {requestId}` | `bootstrap-response {result:{desktopAppVersion, initialViewState:{activeWorkspaceKey, activeTaskId}}}` | 初始状态 ✅ 实测 |
+| `workspace-list-request {requestId}` | `workspace-list-response {result:[工作区]}` | 工作区列表 ✅ 已实现 |
+| `platform-request {requestId, method, args}` | `platform-response {requestId, method, success, result/error}` | 平台方法代理 |
+| `workspace-reconnect-request {requestId, workspaceKey}` | `workspace-reconnect-response` | 切换工作区 |
+| `workspace-bridge-open {bridgeSessionId, bridgeGeneration, recoveryId, workspaceKey, taskId?}` | `workspace-bridge-ready {bridge:{bridgeSessionId, bridgeGeneration, recoveryId, workspaceKey, initialTaskId}}` | **阶段二入口** ✅ 已实现 |
+| `mobile-view-state-update`（发送方向） | — | 上报当前视图状态 |
+
+**阶段二 · 桥接内的 RPC**（`workspace-bridge-ready` 之后）
+用返回的 bridge 身份构造持久协议（`bridgeSessionId/bridgeGeneration/recoveryId` + 13 字节帧头 VSCode RPC，
+即 `packages/rpc` 的 SocketProtocol/PersistentProtocol），承载 v4 方法与命令
+（`v4/conversation/*` 订阅、`v4command` 的 sendText/stop/resolveInteraction）。
+
+→ 要让「桌面端已有会话」支持远程发送/审批，需要完成阶段二（桥接 RPC 栈）。
+
+## 10. 附：会话模型与执行链路的实测结论
+
+- `state.updated` 通知里的 `patch.model.available[]` 是官方 UI 的模型清单来源
+  （含 `ref:{providerId, modelId}`、`label`、`providerLabel`、`contextWindow`、最大输出等），
+  可用来替代当前基于配置文件的 `models.list` 聚合。
+- 本项目独立进程下实测：`session/create`（指定 `deepseek/deepseek-v4-pro` + `reasoningLevel:high`）
+  → `prompt_started`（turn 启动）→ 模型列表注册成功（DeepSeek 鉴权可用）。
+  但 25~70s 内未产出 part/落库，疑似等待 provider 运行时头
+  （host 模式下 `interaction/requestProviderRuntimeHeaders` 需宿主应答，目前返回 `{}`）。
 
 ## 6. 落地形态（建议）
 

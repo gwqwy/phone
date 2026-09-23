@@ -220,7 +220,8 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
     <NavBar :title="title" :back="true" @back="() => uni.navigateBack()">
       <template #right>
         <text class="model-btn" @tap="modelPickerVisible = true">
-          {{ currentModel ? currentModel : '模型' }}
+          <text class="model-btn-icon">⚙</text>
+          <text class="model-btn-text">{{ currentModel || '模型' }}</text>
         </text>
         <text class="panel-btn" :class="{ on: !compact }" @tap="compact = !compact">{{ compact ? '详' : '简' }}</text>
         <text v-if="running && canStop" class="stop-btn" @tap="stopTask">停止</text>
@@ -288,15 +289,27 @@ async function resolve(interactionId: string, outcome: 'approve' | 'reject'): Pr
 
 <style scoped>
 .model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--zp-bg-elev2);
   color: var(--zp-accent);
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
   border: 1px solid var(--zp-accent);
-  border-radius: 8px;
-  max-width: 130px;
+  border-radius: 999px;
+  max-width: 190px;
+  box-sizing: border-box;
+}
+.model-btn-icon {
+  font-size: 13px;
+}
+.model-btn-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 150px;
 }
 .panel-btn {
   color: var(--zp-text-dim);

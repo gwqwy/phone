@@ -28,7 +28,7 @@ const emit = defineEmits<{ (e: 'back'): void }>()
   z-index: 10;
 }
 .zp-nav-side {
-  width: 64px;
+  min-width: 56px;
   display: flex;
   align-items: center;
 }
@@ -50,5 +50,7 @@ const emit = defineEmits<{ (e: 'back'): void }>()
 }
 .zp-nav-right {
   justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
 }
 </style>

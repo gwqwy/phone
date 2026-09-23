@@ -234,6 +234,15 @@ export class RelayClient {
 
   #onInnerJson(frame: Record<string, unknown>): void {
     const zt = String(frame.zcode_type)
+    // 阶段一通道的响应分发（按 requestId）
+    const reqId = String(frame.requestId ?? '')
+    if (reqId && this.#pendingJson.has(reqId)) {
+      const cb = this.#pendingJson.get(reqId)!
+      this.#pendingJson.delete(reqId)
+      info(`[relay][v4] ← ${zt}（reqId=${reqId}）`)
+      cb(frame)
+      return
+    }
     if (zt === 'bootstrap-response') {
       const reqId = String(frame.requestId ?? '')
       if (reqId === this.#bootstrapReqId) {
@@ -248,6 +257,58 @@ export class RelayClient {
 
   #bootstrapReqId = ''
   #bootstrapDone = false
+
+  /** 阶段一：workspace-list-request → workspace-list-response（桌面端工作区列表） */
+  requestWorkspaceList(timeoutMs = 20_000): Promise<Record<string, unknown> | null> {
+    return this.#jsonExchange('workspace-list-request', {}, 'workspace-list-response', timeoutMs)
+  }
+
+  /** 阶段一：workspace-bridge-open → workspace-bridge-ready（桥接身份，阶段二 RPC 的入口） */
+  openBridge(workspaceKey: string, taskId?: string, timeoutMs = 30_000): Promise<Record<string, unknown> | null> {
+    const bridgeSessionId = randomUUID()
+    return this.#jsonExchange(
+      'workspace-bridge-open',
+      { bridgeSessionId, bridgeGeneration: 1, workspaceKey, ...(taskId ? { taskId } : {}) },
+      'workspace-bridge-ready',
+      timeoutMs,
+      (frame) => String((frame as Record<string, unknown>).bridgeSessionId ?? '') === bridgeSessionId,
+    )
+  }
+
+  /** 通用 JSON 信封请求（阶段一通道：request/response 成对，按 requestId 匹配） */
+  #pendingJson = new Map<string, (frame: Record<string, unknown>) => void>()
+
+  #jsonExchange(
+    requestType: string,
+    extra: Record<string, unknown>,
+    responseType: string,
+    timeoutMs: number,
+    match?: (frame: Record<string, unknown>) => boolean,
+  ): Promise<Record<string, unknown> | null> {
+    return new Promise((resolve) => {
+      if (!this.#ws || this.#state !== 'matched') {
+        resolve(null)
+        return
+      }
+      const requestId = randomUUID().slice(0, 12)
+      const timer = setTimeout(() => {
+        this.#pendingJson.delete(requestId)
+        warn(`[relay][v4] ${requestType} 超时（${timeoutMs / 1000}s）`)
+        resolve(null)
+      }, timeoutMs)
+      this.#pendingJson.set(requestId, (frame) => {
+        clearTimeout(timer)
+        resolve(frame)
+      })
+      this.sendRaw({
+        type: 'data',
+        payload: { zcode_type: requestType, requestId, ...extra },
+        client_ts: Date.now(),
+      })
+      info(`[relay][v4] → ${requestType}（reqId=${requestId}）`)
+      void match
+    })
+  }
 
   /** 配对成功后向桌面端请求 bootstrap（官方 mobile 前端的第一条内层消息） */
   requestBootstrap(timeoutMs = 15_000): Promise<Record<string, unknown> | null> {
