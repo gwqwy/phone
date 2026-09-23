@@ -2,9 +2,14 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { info, warn } from '../../log.ts'
 import {
   RPC_CHANNEL_ZCODE_AGENT,
+  RPC_FRAME_TYPE_ACK,
+  RPC_FRAME_TYPE_CONTROL,
+  RPC_FRAME_TYPE_KEEPALIVE,
+  RPC_FRAME_TYPE_REGULAR,
   RpcRequestType,
   RpcResponseType,
   deserializeValue,
+  frameControl,
   frameRpc,
   parseRpcFrames,
   serializeValue,
@@ -378,8 +383,7 @@ export class RelayClient {
     this.#events.onRawFrame?.(bytes)
     if (frames.length) {
       for (const f of frames) {
-        this.#ackSeq = f.ack || this.#ackSeq
-        this.#dispatchChannelBody(f.body)
+        this.#dispatchFrame(f)
       }
       return
     }
@@ -448,7 +452,38 @@ export class RelayClient {
   // ---------- 阶段二：桥接内 channel RPC（13 字节帧 + channel 序列化） ----------
 
   #rpcSeq = 0
+  #protoId = 0
+  #lastRecvId = 0
+  #keepAliveTimer: ReturnType<typeof setInterval> | null = null
   #rpcPending = new Map<number, (r: { ok: boolean; body?: unknown; error?: string }) => void>()
+
+  /** 按 PersistentProtocol 类型分派入站帧（Regular / Ack / KeepAlive / Control） */
+  #dispatchFrame(f: { type: number; id: number; ack: number; body: Buffer }): void {
+    this.#lastRecvId = Math.max(this.#lastRecvId, f.id)
+    switch (f.type) {
+      case RPC_FRAME_TYPE_REGULAR:
+        this.#dispatchChannelBody(f.body)
+        return
+      case RPC_FRAME_TYPE_KEEPALIVE:
+        // 回一个 KeepAlive（携带已收确认），否则对端判 rpc-transport-fault
+        this.#sendRawFrame(frameControl(RPC_FRAME_TYPE_KEEPALIVE, ++this.#protoId, this.#lastRecvId))
+        return
+      case RPC_FRAME_TYPE_ACK:
+      case RPC_FRAME_TYPE_CONTROL:
+        return
+      default:
+        return
+    }
+  }
+
+  /** 启动协议层心跳（桥接就绪后调用） */
+  startKeepAlive(intervalMs = 5000): void {
+    if (this.#keepAliveTimer) return
+    this.#keepAliveTimer = setInterval(() => {
+      if (this.#state !== 'matched') return
+      this.#sendRawFrame(frameControl(RPC_FRAME_TYPE_KEEPALIVE, ++this.#protoId, this.#lastRecvId))
+    }, intervalMs)
+  }
 
   /** 桥接内 RPC 调用：serialize([Promise, id, channel, method]) + serialize(arg) */
   rpcCall(method: string, arg?: unknown, timeoutMs = 30_000): Promise<unknown> {
@@ -469,15 +504,14 @@ export class RelayClient {
       })
       const header = serializeValue([RpcRequestType.Promise, id, RPC_CHANNEL_ZCODE_AGENT, method])
       const payload = serializeValue(arg)
-      const frame = frameRpc(header, payload, id, this.#ackSeq)
       this.#v4Mode = 'channel-frame'
-      this.#sendBinaryFrame(frame)
-      info(`[relay][rpc] → ${method}（id=${id}，${frame.length}B）`)
+      this.#sendRawFrame(frameRpc(header, payload, ++this.#protoId, this.#lastRecvId))
+      info(`[relay][rpc] → ${method}（id=${id}，proto=${this.#protoId}，ack=${this.#lastRecvId}）`)
     })
   }
 
   /** 把二进制帧包进 rpc-frame data 发送 */
-  #sendBinaryFrame(frame: Buffer): void {
+  #sendRawFrame(frame: Buffer): void {
     this.#seq += 1
     this.sendRaw({
       type: 'data',

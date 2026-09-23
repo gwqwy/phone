@@ -97,6 +97,7 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
       if (bridge) {
         this.#bridge = (bridge.bridge ?? bridge) as Record<string, unknown>
         info(`[relay] 桥接就绪：${JSON.stringify(this.#bridge).slice(0, 200)}`)
+        this.#client?.startKeepAlive()
         void this.#rpcHandshake()
       }
     }

@@ -24,6 +24,9 @@ export const RpcDataType = {
 } as const
 
 export const RPC_FRAME_TYPE_REGULAR = 1
+export const RPC_FRAME_TYPE_CONTROL = 2
+export const RPC_FRAME_TYPE_ACK = 3
+export const RPC_FRAME_TYPE_KEEPALIVE = 9
 export const RPC_HEADER_SIZE = 13
 
 /** 请求类型（packages/rpc/src/channels.shared.ts） */
@@ -164,18 +167,32 @@ export function frameRpc(header: Buffer, payload: Buffer, id = 0, ack = 0): Buff
   return frame
 }
 
-/** 解出 13 字节帧序列（粘包处理） */
-export function parseRpcFrames(data: Buffer): { id: number; ack: number; body: Buffer }[] {
-  const out: { id: number; ack: number; body: Buffer }[] = []
+/**
+ * 解出 13 字节帧序列（粘包处理）。
+ * 注意：PersistentProtocol 会混发 Regular(1)/控制帧(2)/Ack(3)/KeepAlive(9)，
+ * 必须全部解出并按类型分派，否则对端等不到确认会判定 rpc-transport-fault。
+ */
+export function parseRpcFrames(data: Buffer): { type: number; id: number; ack: number; body: Buffer }[] {
+  const out: { type: number; id: number; ack: number; body: Buffer }[] = []
   let off = 0
   while (off + RPC_HEADER_SIZE <= data.length) {
     const type = data.readUInt8(off)
     const id = data.readUInt32BE(off + 1)
     const ack = data.readUInt32BE(off + 5)
     const len = data.readUInt32BE(off + 9)
-    if (type !== RPC_FRAME_TYPE_REGULAR || len > 32 * 1024 * 1024 || off + RPC_HEADER_SIZE + len > data.length) break
-    out.push({ id, ack, body: Buffer.from(data.subarray(off + RPC_HEADER_SIZE, off + RPC_HEADER_SIZE + len)) })
+    if (len > 32 * 1024 * 1024 || off + RPC_HEADER_SIZE + len > data.length) break
+    out.push({ type, id, ack, body: Buffer.from(data.subarray(off + RPC_HEADER_SIZE, off + RPC_HEADER_SIZE + len)) })
     off += RPC_HEADER_SIZE + len
   }
   return out
+}
+
+/** 构造控制帧（KeepAlive / Ack；无载荷） */
+export function frameControl(type: number, id: number, ack: number): Buffer {
+  const frame = Buffer.alloc(RPC_HEADER_SIZE)
+  frame.writeUInt8(type, 0)
+  frame.writeUInt32BE(id >>> 0, 1)
+  frame.writeUInt32BE(ack >>> 0, 5)
+  frame.writeUInt32BE(0, 9)
+  return frame
 }

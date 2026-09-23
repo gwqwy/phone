@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-09-23T12:47:07.272Z",
+  "recordedAt": "2026-09-23T12:52:01.190Z",
   "sessionId": "sess_ca394e23-5e8b-4d0c-b99a-f3e28f7fbfc1",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "server/src/adapters/zcode-relay/index.ts",
+  "file": "server/scripts/probe-diag.ts",
   "outcome": "inconclusive",
   "coverage": "partial",
   "findingCount": 0,
-  "durationMs": 10047,
+  "durationMs": 10030,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

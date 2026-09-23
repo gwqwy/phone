@@ -13,8 +13,12 @@ function resolveCommand(): string {
 
 async function main(): Promise<void> {
   const conn = new AppServerConnection()
+  let stderrLines = 0
   await conn.start(resolveCommand(), ['app-server', '--stdio'], os.homedir(), (line) => {
-    process.stdout.write(`[stderr] ${line.slice(0, 300)}\n`)
+    if (stderrLines < 80) {
+      stderrLines += 1
+      process.stdout.write(`[stderr] ${line.slice(0, 400)}\n`)
+    }
   })
   conn.onReverseRequest((method, params) => {
     process.stdout.write(`[reverse] ${method}\n`)
