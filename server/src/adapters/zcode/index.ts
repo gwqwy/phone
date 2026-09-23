@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { AppServerConnection } from './connection.ts'
 import { ZcodeDbReader } from './db.ts'
-import { mapStatus, rowsToEvents, type V4Row } from './map.ts'
+import { friendlyModelError, mapStatus, rowsToEvents, type V4Row } from './map.ts'
 import type { HarnessAdapter, HistoryRange, ModelCatalog, StreamCallback } from '../../core/harness.ts'
 import type { AppConfig } from '../../config.ts'
 import { DATA_DIR } from '../../config.ts'
@@ -358,8 +358,27 @@ export class ZcodeAdapter implements HarnessAdapter {
         this.#scheduleListRefresh()
         return
       }
+      case 'turn.failed': {
+        // 把上游模型错误（额度/鉴权/超时）友好地推到时间线
+        const p = (payload ?? {}) as Record<string, unknown>
+        const err = (p.error ?? {}) as { message?: string; detail?: string; code?: string }
+        const raw = String(err.message ?? err.detail ?? err.code ?? '模型调用出错')
+        this.#pushToSession(sessionId, {
+          kind: 'append',
+          events: [
+            {
+              id: `turn-failed-${Date.now()}`,
+              kind: 'system',
+              ts: new Date().toISOString(),
+              status: 'error',
+              text: friendlyModelError(raw),
+            },
+          ],
+        })
+        this.#scheduleListRefresh()
+        return
+      }
       case 'turn.completed':
-      case 'turn.failed':
       case 'session.updated':
       case 'session.titleUpdated':
       case 'session.created':

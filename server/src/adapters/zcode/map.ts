@@ -135,6 +135,18 @@ function fallbackTsMs(iso: string): number {
   return Number.isFinite(t) ? t : Date.now()
 }
 
+/** 上游模型错误 → 用户可读文案（额度/限流/鉴权） */
+export function friendlyModelError(raw: string): string {
+  const quotaRe = /\[1310\]|使用上限|rate_limit|quota/i
+  if (quotaRe.test(raw)) {
+    const reset = raw.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)
+    return `模型额度已达上限${reset ? `，将于 ${reset[1]} 重置` : ''}——可在会话右上角切换到其他模型，或更换 API Key`
+  }
+  if (/401|unauthor|invalid.*key|鉴权/i.test(raw)) return `模型鉴权失败：${raw.slice(0, 120)}`
+  if (/timeout|超时/i.test(raw)) return `模型响应超时：${raw.slice(0, 120)}`
+  return raw.slice(0, 300)
+}
+
 /** 整条消息（info+parts）→ 事件列表 */
 export function messageToEvents(msg: ZcodeMessageWithParts): TimelineEvent[] {
   const info = msg.info ?? {}
@@ -148,7 +160,13 @@ export function messageToEvents(msg: ZcodeMessageWithParts): TimelineEvent[] {
   }
   // assistant 消息出错且没有任何事件时，给出错误行
   if (role === 'assistant' && info.error && out.length === 0) {
-    out.push({ id: `${msgId}:error`, kind: 'system', ts: fallback, status: 'error', text: String(info.error.message ?? '模型调用出错') })
+    out.push({
+      id: `${msgId}:error`,
+      kind: 'system',
+      ts: fallback,
+      status: 'error',
+      text: friendlyModelError(String((info.error as { message?: string }).message ?? '模型调用出错')),
+    })
   }
   return out
 }

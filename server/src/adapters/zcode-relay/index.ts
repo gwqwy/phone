@@ -60,6 +60,9 @@ export class ZcodeRelayAdapter implements HarnessAdapter {
       if (bridge) {
         this.#bridge = (bridge.bridge ?? bridge) as Record<string, unknown>
         info(`[relay] 桥接就绪：${JSON.stringify(this.#bridge).slice(0, 200)}`)
+        // 阶段二首步：桥接通道内发起 v4 clientHello（先裸 NDJSON，8s 无响应自动改 13 字节帧头）
+        this.#client?.sendV4Hello()
+        info('[relay] 已通过桥接发送 v4 clientHello')
       }
     }
     this.#onIndexChanged()

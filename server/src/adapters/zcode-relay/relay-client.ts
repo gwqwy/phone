@@ -208,8 +208,8 @@ export class RelayClient {
         this.#reconnectAttempts = 0
         if (status === 'matched') {
           this.#setState('matched')
-          // 桌面在线：尝试 v4 握手（内层编码实证）
-          this.#sendV4Hello()
+          // 阶段一握手（bootstrap → workspace-list → bridge-open）由适配器驱动；
+          // v4 clientHello 在桥接就绪后由适配器调用 sendV4Hello()
         } else {
           this.#setState('waiting', status)
         }
@@ -378,7 +378,7 @@ export class RelayClient {
   }
 
   /** 发送 v4 消息：先裸 NDJSON，若 8 秒无响应则改试 13 字节帧头包裹 */
-  #sendV4Hello(): void {
+  sendV4Hello(): void {
     const hello = {
       kind: 'clientHello',
       protocolVersion: 3,
