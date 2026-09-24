@@ -1,9 +1,7 @@
 node_modules/
-.data/
-.reference/
+unpackage/
+dist/
 *.log
-server/dist/
-client/dist/
-client/unpackage/
 .DS_Store
-".probe/"  
+Thumbs.db
+.probe/

@@ -1,18 +1,17 @@
 {
-  "name": "zcode-phone",
+  "name": "shou",
   "version": "0.1.0",
   "private": true,
-  "description": "手机远控编码智能体：ZCode / DeepSeek Harness 等 harness 的统一移动端控制台",
+  "type": "module",
+  "description": "shou —— 手机远控编码智能体：ZCode 与 DeepSeek Harness 的统一控制台",
   "engines": {
-    "node": ">=23.6"
+    "node": ">=20"
   },
   "scripts": {
-    "setup": "npm --prefix server install",
-    "start": "npm --prefix server run start",
-    "dev:server": "npm --prefix server run dev",
-    "test": "npm --prefix server run test"
+    "test": "node --test \"tests/*.test.js\"",
+    "probe": "node --use-system-ca tools/probes/doctor.mjs"
   },
-  "uniappClient": {
-    "note": "client/ 是 HBuilderX 项目：用 HBuilderX 打开 client 目录，运行/发行 H5 后产物在 client/unpackage/dist/build/h5，由 server 直接托管"
+  "uniapp": {
+    "note": "client/ 是 HBuilderX 项目，HBuilderX 直接打开 client 目录即可运行/发行。根目录的 package.json 只用于跑单测与探针，不参与打包。"
   }
 }

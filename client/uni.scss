@@ -1,1 +1,36 @@
-/* uni-app 全局 scss 变量；主题色用 CSS 变量（见 theme/theme.scss） */
+/**
+ * uni-app 约定的全局样式变量文件，HBuilderX 的 uni-app 模板默认引用它。
+ *
+ * shou 的主题令牌都在 `theme/theme.css` 里用 CSS 自定义属性定义（深色/浅色两套，
+ * 运行时可切换），TS/SCSS 变量做不到运行时切换，所以这里只保留 uni-app 需要的
+ * 基础尺寸变量，不重复定义颜色——避免出现两套颜色定义、改一处忘一处。
+ */
+
+$uni-color-primary: #35d0e0;
+$uni-color-success: #3ddc85;
+$uni-color-warning: #f0ad4e;
+$uni-color-error: #ff6b5e;
+
+$uni-text-color: #e6eef4;
+$uni-text-color-inverse: #06222a;
+$uni-text-color-grey: #8ca0b3;
+
+$uni-bg-color: #0b1016;
+$uni-bg-color-grey: #121a23;
+$uni-border-color: #223140;
+
+$uni-font-size-sm: 12px;
+$uni-font-size-base: 14px;
+$uni-font-size-lg: 16px;
+
+$uni-spacing-row-sm: 5px;
+$uni-spacing-row-base: 10px;
+$uni-spacing-row-lg: 15px;
+$uni-spacing-col-sm: 4px;
+$uni-spacing-col-base: 8px;
+$uni-spacing-col-lg: 12px;
+
+$uni-border-radius-sm: 4px;
+$uni-border-radius-base: 8px;
+$uni-border-radius-lg: 16px;
+$uni-border-radius-circle: 50%;

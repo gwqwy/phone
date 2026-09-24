@@ -1,0 +1,62 @@
+# 署名与第三方说明（NOTICE）
+
+shou（本仓库）以 MIT 许可发布。它把三个各自独立的上游项目的能力汇集到一个手机客户端里。
+下面逐条说明「用了什么」以及「有没有引入对方的代码」，因为这三条的法律义务并不相同。
+
+## 1. pjpv/zremote — MIT 许可
+
+Copyright (c) 2026 ZRemote contributors
+
+**用了什么**：这是 ZCode 桌面端远控的手机伴侣 App（Flutter）。它的价值在于把 ZCode 远控的
+**产品行为与不变量**固定了下来，我们据此重写了等价逻辑：
+
+- 配对链接的解析与重建规则（`sid`/`hash` 必填、`t` 毫秒时间戳每次使用前重铸、
+  未知查询参数原样保留、只接受 http/https、非默认端口与任意路径都合法）
+- 多端点去重规则（按 `sid` 去重，命中时切换到既有端点而不是新建）
+- 会话索引的合并优先级（任务索引负责标题/工作区/置顶，会话索引负责阶段/时间/待办计数）
+- 排序与分组（运行中优先；按最近活动倒序；置顶优先；今天/昨天/更早按本地日历日切分）
+- 通知差分状态机（待办计数 0→>0 才通知、归零才撤回、首次见到终态不通知）
+- 连接状态灯策略（含九条中继终态关闭原因）
+- 深色主题的色值、字号与圆角
+
+**是否引入代码**：否。以上是按行为重写为 JavaScript 的，没有复制 Dart 源码。依据 MIT 条款，
+即使复制也只需保留版权声明——我们在此声明来源以正视听。
+
+## 2. railgun0325/dsh-phone — MIT 许可
+
+Copyright (c) 2026 railgun0325
+
+**用了什么**：这是把 DeepSeek Harness 装进安卓手机的项目，含 root 版与非 root（Shizuku）版。
+
+- 非 root 路线的事实依据：Shizuku 版以 adb shell 级（uid 2000）运行，Termux + Node.js 是
+  dsh 的运行时，一次性无线调试配对不需要电脑。
+- Android 平台约束（它记录的 g1–g12 关卡）：应用沙箱下任何 app uid 都无法 `open('/data/data')`、
+  硬链接被 SELinux 拒绝所以原子发布必须用 rename、Android 没有 flock 原生模块、
+  WebView 的 `<input type=file>` 必须由宿主实现 `onShowFileChooser`、MIUI 会冻结 Termux
+  所以看门狗与电池豁免是必需品。
+- 访问面：dsh web 在本机 `127.0.0.1:3080`；Shizuku 桥在本机 `127.0.0.1:36527`。
+
+**是否引入代码**：否。shou 不含任何 Java/Kotlin 代码，也不内置部署器——dsh-phone 的
+Shizuku 版 APK 由用户单独安装，shou 只作为客户端接入它启动的 dsh。
+
+## 3. shaobeichen/dsh-pocket — GPL-2.0 许可（**未被引入**）
+
+Copyright (c) shaobeichen 及贡献者
+
+dsh-pocket 是 DeepSeek Harness 的远程访问插件：它把发往本机 dsh 的请求的
+`Host`/`Origin`/`Referer`/`Sec-Fetch-Site` 改写成 loopback 权威，从而穿过 dsh 只信任回环的
+浏览器信任栅栏，并提供局域网与 Cloudflare 隧道两种入口、访问 PIN、WebSocket 心跳与响应压缩。
+
+**它对本项目是外部依赖，不是组成部分**：shou 既不包含也不修改 dsh-pocket 的任何代码，
+只把它当作运行在用户电脑上的独立程序，通过它暴露的 HTTP/WSS 界面访问。
+这正是它能以 MIT 发布的原因——GPL-2.0 的义务没有被传递过来。
+
+如果你把 dsh-pocket 的代码复制进本项目，本项目整体就必须改为 GPL-2.0 并公开源码。
+这一点在 `docs/upstream-notes.md` 里有更详细的说明。
+
+## 4. 被远程控制的两个上游
+
+- **zai-org/ZCode**：被远程控制的桌面端。shou 依据其公开前端 bundle 与开源仓库
+  （`packages/rpc`、`packages/shared/src/zcode-protocol-v4`）还原中继协议，属于互操作性实现。
+- **deepseek-ai/deepseek-harness**：被远程控制的另一个桌面端。shou 通过 dsh-pocket
+  与 dsh 自身的 HTTP 界面访问，不复制其源码。
