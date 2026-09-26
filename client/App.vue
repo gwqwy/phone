@@ -1,6 +1,6 @@
 <script>
 import { state, initApp, applyNativeChrome, lockEnabled } from './store/app.js'
-import { connectEndpoint } from './api/session-manager.js'
+import { connectEndpoint, resumeConnections } from './api/session-manager.js'
 import { applyKeepAlive } from './api/keepalive.js'
 import { closeAll } from './api/dsh-panel.js'
 import { ENDPOINT_KIND_RELAY } from './core/pairing-link.js'
@@ -20,6 +20,9 @@ export default {
   onShow() {
     applyNativeChrome()
     applyKeepAlive()
+    // 回前台立即恢复没有连上的端点：waiting 的重试计时器可能还剩十几秒，
+    // 用户既然回来了就没必要让他等完。
+    resumeConnections()
     if (lockEnabled() && !state.unlocked) {
       const pages = getCurrentPages()
       const current = pages.length ? pages[pages.length - 1].route : ''

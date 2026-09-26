@@ -240,6 +240,9 @@ export class ChannelClient {
     this.lastRequestId = 0
     this.handlers = new Map()
     this.pending = []
+    // 没有对应 handler 的 EventFire（订阅后桌面端推来的增量帧）从这里出去，
+    // 由上层按 topic 路由——订阅的 ack 是 Promise 调用，帧本身不带那个请求 id。
+    this.onUnmatchedEvent = null
   }
 
   get ready() {
@@ -313,7 +316,12 @@ export class ChannelClient {
       return
     }
     const handler = this.handlers.get(id)
-    if (!handler) return
+    if (!handler) {
+      if (type === ResponseType.EventFire && this.onUnmatchedEvent) {
+        this.onUnmatchedEvent(data)
+      }
+      return
+    }
     switch (type) {
       case ResponseType.PromiseSuccess:
         this.handlers.delete(id)

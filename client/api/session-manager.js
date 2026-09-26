@@ -11,27 +11,18 @@
 
 import { RelaySession, V4, CHANNEL_ZCODE_AGENT, uniConnect } from './relay-client.js'
 import { indexOf, recompute, setLed, state, eventsForNotify } from '../store/app.js'
-import { LED_ERROR, LED_LOADING, isTakeoverCode } from '../core/relay-led.js'
-import { findTopicFrame, workspaceKeyFor } from '../core/topics.js'
+import { ENDPOINT_KIND_RELAY } from '../core/pairing-link.js'
+import { CLOSE_DESKTOP_GONE, CLOSE_REPAIR, CLOSE_TAKEOVER, LED_ERROR, LED_LOADING, isTakeoverCode } from '../core/relay-led.js'
+import { findTopicFrame, parseTaskDeltas, workspaceKeyFor } from '../core/topics.js'
 import { notifyEvents } from './notify.js'
 
 const sessions = new Map()
 const retryTimers = new Map()
 const waitingTimers = new Map()
+const waitingCounts = new Map()
 const retryCount = new Map()
 
 const MAX_BACKOFF_MS = 30000
-
-/**
- * `pair_status=waiting` 时的重新握手间隔。
- *
- * 这个状态的含义是"认证通过了，但电脑端的远控腿没在线"——用户把 ZCode 的
- * 「移动端远程控制」页面重新打开后，中继腿就回来了，可我们这一侧是不知情地等着的。
- * 官方客户端靠 pair_status_query 探活，但那条查询发得不对会被直接 KICKED；
- * 相比之下重新握一次手是安全的（我们已经在日志里验证过它会正常返回 auth_ack），
- * 所以这里用"定期重新握手"来达到同样的效果：页面一开，15 秒内自动连上。
- */
-const WAITING_RETRY_MS = 15000
 
 export function sessionFor(endpointId) {
   return sessions.get(endpointId) ?? null
@@ -87,9 +78,7 @@ export function connectEndpoint(endpoint, { reconnect = true } = {}) {
       },
       onBridgeReady: (bridge, channel) => {
         clearBridgeError(endpoint.id)
-        // 桥接就绪后必须**主动订阅**：会话索引与任务索引是订阅型的，
-        // 不订阅桌面端就不会推，列表会停在 bootstrap 那一刻的快照上。
-        autoSubscribe(endpoint.id, bridge, channel)
+        handshakeAndSubscribe(endpoint.id, bridge, channel)
       },
       onBridgeFailed: (reason) => {
         setBridgeError(endpoint.id, reason)
@@ -105,12 +94,25 @@ export function connectEndpoint(endpoint, { reconnect = true } = {}) {
       },
       onClosed: (event) => {
         setLed(endpoint.id, event.terminal ? LED_ERROR : LED_LOADING)
-        if (event.terminal) {
+        sessions.delete(endpoint.id)
+
+        // 四种关闭分开处理。把它们混成一个"终态"曾经导致：
+        // 另一个客户端占着设备（SessionConflict）被报成「配对已失效」，
+        // 而用户的链接完全没问题——他会一眼看出我们在胡说。
+        if (event.kind === CLOSE_REPAIR || event.terminal) {
           markStatus(endpoint.id, 'expired')
-          sessions.delete(endpoint.id)
           return
         }
-        sessions.delete(endpoint.id)
+        if (event.kind === CLOSE_TAKEOVER) {
+          markStatus(endpoint.id, 'kicked')
+          scheduleTakeoverRetry(endpoint)
+          return
+        }
+        if (event.kind === CLOSE_DESKTOP_GONE) {
+          markStatus(endpoint.id, 'waiting')
+          scheduleWaitingRetry(endpoint)
+          return
+        }
         if (reconnect) scheduleReconnect(endpoint, reconnect)
       },
     },
@@ -128,24 +130,62 @@ function toTask(task) {
 }
 
 /**
- * 桥接就绪后订阅控制器与会话。
+ * 桥接握手 + 订阅（对齐官方 bundle 的 `UC` 函数与 ensureHandshake 流程）。
  *
- * 用 promise 链而不是 await：订阅是否成功不影响连接本身，失败只记日志
- * （诊断页会显示"rpc response"与超时错误，据此判断通道名/方法名对不对）。
+ * 官方顺序（缺一步，后面全部无响应）：
+ *   1. Initialize(200) 由桌面端主动推来（ChannelClient 收到后置 ready）；
+ *   2. `helloConversationV4()` —— 响应里有**桌面端分配的 connectionId 与 clientMode**；
+ *      我曾用自己编的 bridgeSessionId 冒充 connectionId，订阅因此被拒；
+ *   3. `initializeConversationV4({kind:'clientHello', ...})` —— clientKind 按协商结果取
+ *      （web-remote-replayable → 'web'，不是 'mobileRemote'）；appVersion 官方就是 'unknown'；
+ *   4. 之后才允许订阅与读行。
+ *
+ * 参数形状：官方服务代理把参数**包在一层数组里**发（`e.call(r, [obj])`），所以
+ * hello 的线上参数是空数组 `[]`，其余是 `[参数对象]`。
  */
-function autoSubscribe(endpointId, bridge, channel) {
+async function handshakeAndSubscribe(endpointId, bridge, channel) {
   const note = (text) => sessions.get(endpointId)?.pushLog('·', text)
+  const session = sessions.get(endpointId)
   const ch = channel.getChannel(CHANNEL_ZCODE_AGENT)
 
-  ch.call(V4.controllerSubscribe, connectionParams(endpointId))
-    .then(() => note('controller/subscribe ok'))
-    .catch((error) => note(`controller/subscribe failed: ${error?.message ?? error}`))
+  try {
+    const hello = await ch.call(V4.hello, [])
+    const connectionId = hello?.connectionId ?? ''
+    const clientMode = hello?.clientMode ?? 'web-remote-replayable'
+    if (!connectionId) {
+      note('hello 响应里没有 connectionId，订阅可能被拒')
+    }
+    session.connectionInfo = { connectionId, clientMode }
+    note(`hello ok mode=${clientMode} conn=${connectionId.slice(0, 8)}…`)
 
-  if (bridge?.initialTaskId) {
-    ch.call(V4.conversationSubscribe, connectionParams(endpointId, { sessionId: bridge.initialTaskId }))
-      .then(() => note(`conversation/subscribe ok task=${bridge.initialTaskId}`))
-      .catch((error) => note(`conversation/subscribe failed: ${error?.message ?? error}`))
+    await ch.call(V4.initialize, [
+      {
+        kind: 'clientHello',
+        protocolVersion: 3,
+        clientId: bridge?.bridgeSessionId ?? connectionId,
+        clientKind: clientMode === 'desktop-continuous' ? 'desktop' : 'web',
+        appVersion: 'unknown',
+        capabilities: { workspaceHookReviewUi: true },
+      },
+    ])
+    note('clientHello ok')
+  } catch (error) {
+    note(`握手失败：${error?.message ?? error}`)
+    // 握手失败也继续订阅——错误已经进了日志，界面能看到。
   }
+
+  if (session.connectionInfo?.connectionId && bridge?.initialTaskId) {
+    subscribeConversation(endpointId, bridge.initialTaskId, () => {})
+  }
+  subscribeController(endpointId, CONTROLLER_TOPIC_TASKS, (frame) => {
+    const payload = frame?.payload ?? {}
+    const { upserts, removes, archived } = parseTaskDeltas(payload)
+    const index = indexOf(endpointId)
+    if (upserts.length) index.upsertTasks(upserts)
+    if (removes.length) index.removeSessions(removes)
+    if (archived.length) index.upsertArchived(archived)
+    if (upserts.length || removes.length || archived.length) recompute(endpointId)
+  })
 }
 
 export function disconnectEndpoint(endpointId) {
@@ -188,9 +228,30 @@ function clearRetry(endpointId) {
   retryCount.delete(endpointId)
 }
 
+/**
+ * `pair_status=waiting` 时的重新握手间隔——**递进加速**而不是固定 15 秒。
+ *
+ * 为什么：waiting 的最常见成因是桌面端远控页面的 WebSocket 掉线重连的**短暂窗口**
+ * （窗口最小化时 Electron 节流后台页面、Windows 睡眠唤醒、网络抖动）——
+ * 真机日志里同一个 sid、电脑端没动，一次握手 waiting、十几分钟后的另一次 matched。
+ * 这种窗口通常一两秒就过去，固定 15 秒会把"本该 2 秒恢复"变成"用户盯着等待看 15 秒"，
+ * 表现正好是"进软件没法第一时间连接，可电脑端明明开着"。
+ */
+const WAITING_RETRY_STEPS = [2000, 4000, 8000, 15000]
+
+/** 第 count 次等待后的重试延迟。抽成纯函数以便单测钉住递进节奏。 */
+export function waitingRetryDelay(count) {
+  const step = Math.min(Math.max(0, count), WAITING_RETRY_STEPS.length - 1)
+  return WAITING_RETRY_STEPS[step]
+}
+
 /** 注册"等待桌面端"期间的定期重新握手；同一端点同时只允许一个。 */
 function scheduleWaitingRetry(endpoint) {
   if (waitingTimers.has(endpoint.id)) return
+  const count = waitingCounts.get(endpoint.id) ?? 0
+  const delay = waitingRetryDelay(count)
+  waitingCounts.set(endpoint.id, count + 1)
+  sessions.get(endpoint.id)?.pushLog('·', `pair waiting，${delay}ms 后重新握手`)
   const timer = setTimeout(() => {
     waitingTimers.delete(endpoint.id)
     // 重新握手前先确认还没连上（用户可能已经手动重连或页面已恢复）。
@@ -198,7 +259,7 @@ function scheduleWaitingRetry(endpoint) {
     disconnectEndpoint(endpoint.id)
     connectEndpoint(endpoint)
     scheduleWaitingRetry(endpoint)
-  }, WAITING_RETRY_MS)
+  }, delay)
   waitingTimers.set(endpoint.id, timer)
 }
 
@@ -206,6 +267,26 @@ function clearWaiting(endpointId) {
   const timer = waitingTimers.get(endpointId)
   if (timer) clearTimeout(timer)
   waitingTimers.delete(endpointId)
+  waitingCounts.delete(endpointId)
+}
+
+/**
+ * 回到前台时立即恢复连接。
+ *
+ * 场景：用户切出去几分钟再回来——此时要么 waiting 计时器还在慢悠悠地走，
+ * 要么进程已被系统杀掉而 onLaunch 已经接上。对前一种，这里立即重新握手一次，
+ * 不让用户等剩下的计时；对后一种，onLaunch 已经处理，这里跳过。
+ */
+export function resumeConnections() {
+  for (const endpoint of state.list) {
+    if (endpoint.kind !== ENDPOINT_KIND_RELAY) continue
+    const status = statusOf(endpoint.id)
+    // paired 不用动；expired 要用户重新配对，自动重试无意义；
+    // connecting 说明握手正在进行，打断它反而坏事。
+    if (status === 'paired' || status === 'expired' || status === 'connecting') continue
+    disconnectEndpoint(endpoint.id)
+    connectEndpoint(endpoint)
+  }
 }
 
 /**
@@ -331,14 +412,13 @@ export async function tryPlatform(endpointId, method, args = {}) {
   return session.platformCall(method, args)
 }
 
-/** 把行参数换成 OSS 里的真实形状。 */
+/** 把行参数换成官方形状。connectionId 用 **hello 响应里桌面端分配的**，不是自编的。 */
 function connectionParams(endpointId, extra = {}) {
   const session = sessions.get(endpointId)
-  const bridge = session?.bridge
+  const info = session?.connectionInfo ?? {}
   return {
-    // host 会为每个下游客户端分配 connectionId；桥接身份就是我们这条连接。
-    connectionId: bridge?.bridgeSessionId ?? '',
-    clientMode: 'web-remote-replayable',
+    connectionId: info.connectionId ?? '',
+    clientMode: info.clientMode ?? 'web-remote-replayable',
     ...extra,
   }
 }
@@ -354,49 +434,33 @@ function rowsParams(sessionId, limit) {
 }
 
 /**
- * 读一窗会话行，**两条路都试**。
+ * 读一窗会话行（`v4/conversation/rowsRange`），走桥接通道。
  *
- *   1. 桥接通道（阶段二，`v4/conversation/rowsRange`）；
- *   2. 阶段一的通用方法代理 `platform-request`——早期协议笔记里其实写过
- *      "数据面即 bootstrap/platform-request 通道，无需 VSCode RPC 栈"，
- *      而真机上桥接一直没有回应，所以这条老结论值得认真试。
- *
- * 谁先给出可用结果就用谁，并把走的哪条路交给界面显示——省得下次又只能猜。
- *
- * @returns {{via:'bridge'|'platform'|'none', payload?:any, error?:string}}
+ * 曾经这里还试过一条"用 `platform-request` 代理 v4 方法"的退路，**现已删除**：
+ * 从官方前端 bundle 里查到 `platform-request.method` 是一个只有 7 个值的枚举
+ * （`isDockerAvailable` / `listWSLDistros` / `listDockerContainers` /
+ * `listSSHConfigAliases` / `loadMcpFromUserDirectory` / `saveMcpToUserDirectory` /
+ * `migrateLegacyCommonMcp`），它**不是**通用 RPC 代理。用 `v4/conversation/rowsRange`
+ * 去问必然被无视，白等 8 秒超时，还会把"读取失败"的真实原因盖住。
+ * 会话内容只能经桥接通道读，所以这里只做一件事，失败就如实报原因。
  */
 export async function readRows(endpointId, sessionId, { limit = 200 } = {}) {
   const session = sessions.get(endpointId)
   if (!session) return { via: 'none', error: '端点未连接' }
-  const params = rowsParams(sessionId, limit)
 
-  if (session.channel) {
-    try {
-      const payload = await session.channel.getChannel(CHANNEL_ZCODE_AGENT).call(V4.conversationRowsRange, params)
-      return { via: 'bridge', payload }
-    } catch (error) {
-      // 桥接不通不是终点，继续试 platform——这条错误只记日志。
-      session.pushLog('!', `bridge rowsRange failed: ${error?.message ?? error}`)
-    }
+  if (!session.channel) {
+    return { via: 'none', error: '桥接通道未就绪（会话内容只能经桥接读取）' }
   }
 
   try {
-    const response = await session.platformCall('v4/conversation/rowsRange', params)
-    if (response?.success === false) {
-      return { via: 'platform', error: String(response.error ?? '电脑端返回失败') }
-    }
-    // platform-response 的载荷可能是 {result} 或直接就是结果。
-    return { via: 'platform', payload: response?.result ?? response }
+    // 官方服务代理把参数包在一层数组里发：`e.call(name, [params])`。
+    const payload = await session.channel
+      .getChannel(CHANNEL_ZCODE_AGENT)
+      .call(V4.conversationRowsRange, [rowsParams(sessionId, limit)])
+    return { via: 'bridge', payload }
   } catch (error) {
-    return { via: 'none', error: String(error?.message ?? error) }
+    return { via: 'bridge', error: String(error?.message ?? error) }
   }
-}
-
-/** 只走 platform-request 的读取（诊断页用，便于单独验证这条路）。 */
-export async function readRowsViaPlatform(endpointId, sessionId, { limit = 50 } = {}) {
-  const session = sessions.get(endpointId)
-  if (!session) throw new Error('端点未连接')
-  return session.platformCall(V4.conversationRowsRange, rowsParams(sessionId, limit))
 }
 
 /** 桥接通道是否已就绪。 */
@@ -404,20 +468,45 @@ export function hasChannel(endpointId) {
   return Boolean(sessions.get(endpointId)?.channel)
 }
 
-/** 订阅会话实时帧（`v4/conversation/subscribe`）。 */
+/** 订阅会话实时帧（`subscribeConversationV4`）。
+ *
+ * 官方把订阅当**普通 Promise 调用**发（不是 EventListen），响应是
+ * `{ack:{subscriptionId}}`；之后的增量帧由桌面端以 EventFire 推来。
+ * 这里发订阅并保留 ack；帧路由由 unmatched-event 通道处理。
+ */
 export function subscribeConversation(endpointId, sessionId, onFrame) {
   const session = sessions.get(endpointId)
   if (!session?.channel) return () => {}
   const channel = session.channel.getChannel(CHANNEL_ZCODE_AGENT)
-  return channel.listen(V4.conversationSubscribe, connectionParams(endpointId, { sessionId }), onFrame)
+  channel
+    .call(V4.conversationSubscribe, [connectionParams(endpointId, { sessionId })])
+    .then((ack) => sessions.get(endpointId)?.pushLog('·', `conversation subscribe ack=${JSON.stringify(ack).slice(0, 120)}`))
+    .catch((error) => sessions.get(endpointId)?.pushLog('!', `conversation subscribe failed: ${error?.message ?? error}`))
+  return session.addConversationListener(sessionId, onFrame)
 }
 
-/** 订阅控制器（`v4/controller/subscribe`）。 */
-export function subscribeController(endpointId, onEvent) {
+/**
+ * 订阅控制面（`subscribeControllerV4`）。
+ *
+ * 官方调用：`subscribeControllerV4({topic:'controller/tasks-index', visibility:'foreground'})`——
+ * 同样是 **Promise 调用 + 包一层数组**，不是 EventListen。
+ * topic 是 `controller/tasks-index`（任务实时增量）这类字符串。
+ */
+export const CONTROLLER_TOPIC_TASKS = 'controller/tasks-index'
+
+/** 控制面订阅的线级参数。抽成纯函数以便单测钉住形状。 */
+export function controllerSubscribeParams(topic) {
+  return { topic, visibility: 'foreground' }
+}
+
+export function subscribeController(endpointId, topic, onEvent) {
   const session = sessions.get(endpointId)
   if (!session?.channel) return () => {}
-  const channel = session.channel.getChannel(CHANNEL_ZCODE_AGENT)
-  return channel.listen(V4.controllerSubscribe, connectionParams(endpointId), onEvent)
+  session.channel
+    .getChannel(CHANNEL_ZCODE_AGENT)
+    .call(V4.controllerSubscribe, [controllerSubscribeParams(topic)])
+    .catch((error) => session.pushLog('!', `controller subscribe failed: ${error?.message ?? error}`))
+  return session.addTopicListener(topic, onEvent)
 }
 
 // ---------------------------------------------------------------------------

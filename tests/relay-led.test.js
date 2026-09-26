@@ -1,10 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  CLOSE_DESKTOP_GONE,
+  CLOSE_REPAIR,
+  CLOSE_TAKEOVER,
+  CLOSE_TRANSIENT,
   LED_ERROR,
   LED_LIVE,
   LED_LOADING,
   TERMINAL_REASONS,
+  classifyClose,
   isTakeoverCode,
   isTerminalClose,
   isTerminalReason,
@@ -28,26 +33,33 @@ test('可恢复错误码不改变状态灯', () => {
   assert.equal(onFrameRoot({ type: 'error', code: 'device_offline' }), null, '大小写不敏感')
 })
 
-test('终态判定用官方关闭码，不能把通用断开当成"配对失效"', () => {
-  // 真机症状：电脑端连接一直没变，手机却偶发显示「配对已失效」。
-  // 根因是拿关闭原因字符串当错误码去比，任何一次普通断开都落进"未知错误码"分支被判成终态。
-  assert.equal(isTerminalClose(4004, ''), true, 'SessionNotFound')
-  assert.equal(isTerminalClose(4011, ''), true, 'SessionExpired')
-  assert.equal(isTerminalClose(4013, ''), true, 'InvalidMobileConnection')
+test('四类关闭必须分开：被接管 ≠ 配对失效', () => {
+  // 真机反馈「链接没有改，但连接不上」——因为另一个客户端占着设备（SessionConflict 4009）
+  // 被我们报成了「配对已失效」。用户当然会反驳：他的链接一点问题都没有。
+  assert.equal(classifyClose(4009, ''), CLOSE_TAKEOVER, 'SessionConflict = 被别的客户端占着')
+  assert.equal(classifyClose(0, 'kicked'), CLOSE_TAKEOVER)
 
-  assert.equal(isTerminalClose(1006, ''), false, '异常关闭只是网络断了')
-  assert.equal(isTerminalClose(1005, ''), false, '没有状态码')
-  assert.equal(isTerminalClose(1000, ''), false, '正常关闭')
-  assert.equal(isTerminalClose(0, ''), false, '拿不到码时默认不算终态')
+  assert.equal(classifyClose(4010, ''), CLOSE_DESKTOP_GONE, 'DesktopDisconnected = 电脑端远控页面关了')
+  assert.equal(classifyClose(4012, ''), CLOSE_DESKTOP_GONE, 'WorkspaceClosed')
+  assert.equal(classifyClose(0, 'desktop-disconnected'), CLOSE_DESKTOP_GONE)
 
-  // 拿不到码时才退回文本匹配
-  assert.equal(isTerminalClose(0, 'desktop-disconnected'), true)
-  assert.equal(isTerminalClose(1006, 'session-expired'), true, '文本里有明确原因就认')
+  assert.equal(classifyClose(4004, ''), CLOSE_REPAIR, 'SessionNotFound = 真的要从新配对')
+  assert.equal(classifyClose(4011, ''), CLOSE_REPAIR, 'SessionExpired')
+  assert.equal(classifyClose(4013, ''), CLOSE_REPAIR, 'InvalidMobileConnection')
 
-  // 这一条是回归测试：曾经 reason 为空串都会判成终态
-  assert.equal(isTerminalClose(undefined, undefined), false)
-  assert.equal(isTerminalClose(undefined, 'whatever'), false)
+  assert.equal(classifyClose(1006, ''), CLOSE_TRANSIENT, '网络断了只是暂时的')
+  assert.equal(classifyClose(1000, ''), CLOSE_TRANSIENT)
+  assert.equal(classifyClose(0, ''), CLOSE_TRANSIENT, '拿不准的一律算暂时')
+
+  // 只有"真的要重新配对"才算终态
+  assert.equal(isTerminalClose(4004, ''), true)
+  assert.equal(isTerminalClose(4009, ''), false, '被接管不该逼用户重新扫码')
+  assert.equal(isTerminalClose(4010, ''), false, '电脑端离线等它回来就行')
+  assert.equal(isTerminalClose(1006, ''), false)
 })
+
+// 旧的 orphan 断言（isTerminalClose 把 desktop-disconnected 也算终态）已随归类拆解删除，
+// 新行为由上面那条"四类关闭必须分开"覆盖。
 
 test('只给通用关闭码时不显示"配对已失效"，交给自动重连', () => {
   assert.equal(isTerminalReason(''), false)
@@ -80,10 +92,18 @@ test('socket open 是"连接中"，不是"已连接"', () => {
   assert.equal(onSocketEvent({ kind: 'open' }), LED_LOADING)
 })
 
-test('终态关闭原因把灯变红，普通断开继续显示连接中', () => {
-  for (const reason of TERMINAL_REASONS) {
+test('只有"真的要重新配对"才把灯变红，其余交给自动重连', () => {
+  // 旧行为是九种原因一律变红，于是"另一个客户端占着设备"和"电脑端页面关了"
+  // 都被显示成「配对已失效」——用户会立刻反驳"我的链接没改"。现在按类分开。
+  for (const reason of ['session-not-found', 'session-expired', 'invalid-mobile-connection']) {
     assert.equal(onSocketEvent({ kind: 'closed', reason: `x ${reason} y` }), LED_ERROR, reason)
-    assert.equal(isTerminalReason(reason), true)
+  }
+  for (const reason of ['desktop-disconnected', 'workspace-closed', 'kicked', 'session-conflict', 'connection-recovery-timeout', 'desktop-bootstrap-timeout']) {
+    assert.equal(
+      onSocketEvent({ kind: 'closed', reason: `x ${reason} y` }),
+      LED_LOADING,
+      `${reason} 是可恢复的，不该报成配对失效`,
+    )
   }
   assert.equal(onSocketEvent({ kind: 'closed', reason: 'network hiccup' }), LED_LOADING)
   assert.equal(onSocketEvent({ kind: 'closed' }), LED_LOADING)

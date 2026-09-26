@@ -16,8 +16,16 @@
  */
 
 import { base64, base64Decode, hmacSha256, utf8 } from '../core/crypto.js'
+import { crc32Hex } from '../core/crc32.js'
 import { FrameReader, ProtocolMessageType, ChannelClient, decodeResponse, writeFrame } from '../core/rpc-wire.js'
-import { LED_ERROR, LED_LIVE, LED_LOADING, isTerminalClose, onFrameRoot } from '../core/relay-led.js'
+import {
+  CLOSE_REPAIR,
+  LED_ERROR,
+  LED_LIVE,
+  LED_LOADING,
+  classifyClose,
+  onFrameRoot,
+} from '../core/relay-led.js'
 import {
   FragmentAssembler,
   findEnvelope,
@@ -56,13 +64,31 @@ const MAX_LOG_TEXT = 600
 /** 服务通道名（OSS `packages/shared/src/channels.ts` 的 ServiceChannels.ZCodeAgent）。 */
 export const CHANNEL_ZCODE_AGENT = 'zcode-agent'
 
-/** v4 方法名（OSS `packages/shared/src/zcode-protocol-v4/transport.ts`）。 */
+/**
+ * v4 服务方法名。
+ *
+ * **这里是官方移动端桥接上的真实方法名**——从官方 bundle 的服务代理实现逐字核对：
+ * `toService` 用 `new Proxy({get: (n, r) => (...args) => channel.call(r, args)})` 把
+ * **属性名原样**作为线上 method 发出去，所以官方 UI 调 `e.conversationRowsRangeV4(...)`
+ * 意味着线上方法名就是 `conversationRowsRangeV4`（camelCase + V4 后缀）。
+ *
+ * OSS `V4_METHODS` 里那套 `v4/conversation/rowsRange` 是 **host 通道层**（桌面
+ * renderer→CLI 的 NDJSON/stdio）的名字，与桥接并存但不是同一个面。我曾拿它发到
+ * 桥接上——方法不存在，桌面端无响应，这就是 rowsRange 一直石沉大海的根因。
+ */
 export const V4 = {
-  controllerSubscribe: 'v4/controller/subscribe',
-  controllerUnsubscribe: 'v4/controller/unsubscribe',
-  conversationSubscribe: 'v4/conversation/subscribe',
-  conversationRowsRange: 'v4/conversation/rowsRange',
-  command: 'v4/command',
+  hello: 'helloConversationV4',
+  initialize: 'initializeConversationV4',
+  controllerSubscribe: 'subscribeControllerV4',
+  controllerResync: 'resyncControllerV4',
+  controllerUnsubscribe: 'unsubscribeControllerV4',
+  conversationSubscribe: 'subscribeConversationV4',
+  conversationResync: 'resyncConversationV4',
+  conversationUnsubscribe: 'unsubscribeConversationV4',
+  conversationRowsRange: 'conversationRowsRangeV4',
+  sendCommand: 'sendConversationCommandV4',
+  queryCommands: 'queryConversationCommandsV4',
+  sessionsIndexSubscribe: 'subscribeSessionsIndexV4',
 }
 
 export class RelaySession {
@@ -84,7 +110,8 @@ export class RelaySession {
     this.bridge = null
     this.channel = null
     this.fragments = new FragmentAssembler()
-    this.frameReader = new FrameReader()
+    /** 分片重组：按 messageSeq 攒裸载荷字节（这里的帧没有 13 字节头）。 */
+    this.bridgeParts = new Map()
     this.rpcSeq = 0
     this.requestSeq = 0
     this.pendingRequests = new Map()
@@ -203,23 +230,6 @@ export class RelaySession {
     return requestId
   }
 
-  /**
-   * clientHello。
-   *
-   * OSS 的注释说 subscribe 的 `clientMode`「由可信 host 从该连接的 clientHello 注入」，
-   * 而 `clientKind: "mobileRemote"` 正是官方移动端的取值——所以这一步可能是订阅被接受的前提。
-   * 早期笔记记录过它没有响应，无响应不影响连接，但发了才能让 host 认出来我们是谁。
-   */
-  sendClientHello() {
-    this.sendEnvelope({
-      kind: 'clientHello',
-      protocolVersion: 3,
-      clientId: this.bridge?.bridgeSessionId ?? this.sid,
-      clientKind: 'mobileRemote',
-      appVersion: this.endpoint?.params?.app_version ?? '0.0.0',
-    })
-  }
-
   workspaceList() {
     const requestId = this.nextRequestId('workspace-list')
     this.pendingRequests.set(requestId, 'workspace-list')
@@ -265,14 +275,16 @@ export class RelaySession {
   /**
    * 打开工作区桥接——阶段二的入口。
    *
-   * **不再先发 `workspace-reconnect-request`。** 真机上那条请求被电脑端明确拒绝：
-   * 「远程 workspace 不在当前窗口中，无法重连」。查过 OSS 才确认原因：
-   * ZCode 里"远程 workspace"指的是跑在 **ssh / wsl / docker** 上的工作区
-   * （`remote-workspace-identity.ts` 的 `RemoteWorkspaceIdentityKind = "ssh" | "wsl" | "docker"`），
-   * 跟手机远控是两回事——拿一个本地路径去问它，注定被拒。那是我上一轮的错误假设。
+   * 这一步的字段是从官方 mobile 前端 bundle（remote/v4 3.14.3）里逐字核对出来的，
+   * 之前三个字段都写错了，而桌面端对不合规报文**不报错、直接丢**，所以我们发了三次
+   * 一点回应都没有：
    *
-   * 现在直接发 bridge-open，并且会重发几次：真机上它**完全没有回应**（既不是拒绝也不是接受），
-   * 所以用重发来区分"没收到"和"不认识"。
+   *   1. **`requestId` 是必填**（官方 `requestId: X9('workspace-bridge')`）。我原来根本没带，
+   *      报文校验不过 → 被静默丢弃。这是主因。
+   *   2. `bridgeGeneration` 是**每次开启递增的计数**（官方 `++u`），不是我原来写死的 0。
+   *   3. `recoveryId` **只在续接已有桥接时才带**（官方 `...l ? {recoveryId: l} : {}`）。
+   *      我原来每次编一个新 uuid，会被当成"续接一个桌面端不认识的会话"。
+   *      现在改为从 `workspace-bridge-ready` 的响应里取回来，供断线续接使用。
    */
   openWorkspaceBridge(workspaceKey, taskId) {
     // 已经在开了（同一个工作区）就直接返回：重复调用会让桌面端收到重复请求，
@@ -281,10 +293,10 @@ export class RelaySession {
       return this.bridge
     }
 
+    this.bridgeGeneration = (this.bridgeGeneration ?? 0) + 1
     this.bridge = {
       bridgeSessionId: randomId(),
-      bridgeGeneration: 0,
-      recoveryId: randomId(),
+      bridgeGeneration: this.bridgeGeneration,
       workspaceKey,
     }
     this.bridgeTaskId = taskId ?? null
@@ -306,9 +318,10 @@ export class RelaySession {
     )
     this.sendEnvelope({
       zcode_type: 'workspace-bridge-open',
+      // 官方必填字段。少了它桌面端会静默丢弃整条报文。
+      requestId: this.nextRequestId('workspace-bridge'),
       bridgeSessionId: this.bridge.bridgeSessionId,
       bridgeGeneration: this.bridge.bridgeGeneration,
-      recoveryId: this.bridge.recoveryId,
       workspaceKey: this.bridge.workspaceKey,
       ...(this.bridgeTaskId ? { taskId: this.bridgeTaskId } : {}),
     })
@@ -333,16 +346,46 @@ export class RelaySession {
     this.clearBridgeTimers()
     this.bridge = {
       bridgeSessionId: bridge.bridgeSessionId,
-      bridgeGeneration: bridge.bridgeGeneration ?? 0,
+      bridgeGeneration: bridge.bridgeGeneration ?? this.bridge?.bridgeGeneration ?? 0,
+      // recoveryId 由桌面端下发，断线续接时再带回去（官方就是这么用的）。
       recoveryId: bridge.recoveryId,
       workspaceKey: bridge.workspaceKey,
       initialTaskId: bridge.initialTaskId ?? null,
     }
     this.pushLog('·', `bridge ready key=${this.bridge.workspaceKey} task=${this.bridge.initialTaskId ?? '-'}`)
     this.channel = new ChannelClient((payload) => this.sendRpcFrame(payload))
-    // 桥接就是这条下游连接，先自报家门，再让订阅走 host 的 clientMode 注入。
-    this.sendClientHello()
+    this.connectionInfo = null
+    this.topicListeners = new Map()
+    // 订阅 ack 是 Promise 调用；增量帧不带那个请求 id，按 topic 路由。
+    this.channel.onUnmatchedEvent = (data) => this.dispatchTopicFrame(data)
+    // 握手交给上层（session-manager）：hello → initializeConversationV4，
+    // 因为要从 hello 响应里取桌面端分配的 connectionId 并记录日志。
     this.handlers.onBridgeReady?.(this.bridge, this.channel)
+  }
+
+  /** 注册一个按 topic 前缀匹配的帧监听（`conversation/<sid>`、`controller/tasks-index`）。 */
+  addTopicListener(topic, handler) {
+    if (!this.topicListeners) this.topicListeners = new Map()
+    if (!this.topicListeners.has(topic)) this.topicListeners.set(topic, new Set())
+    this.topicListeners.get(topic).add(handler)
+    return () => this.topicListeners.get(topic)?.delete(handler)
+  }
+
+  /** 按注册的 topic 前缀分发一帧；controller/* 与 conversation/* 都按前缀匹配。 */
+  dispatchTopicFrame(data) {
+    const topic = String(data?.topic ?? '')
+    if (!topic) return
+    for (const [key, handlers] of this.topicListeners ?? []) {
+      if (topic === key || topic.startsWith(key + '/') || key.startsWith(topic)) {
+        for (const handler of handlers) {
+          try {
+            handler(data)
+          } catch {
+            /* 单个监听器的错误不能打断其余路由 */
+          }
+        }
+      }
+    }
   }
 
   clearBridgeTimers() {
@@ -352,17 +395,71 @@ export class RelaySession {
     this.reconnectFallback = null
   }
 
+  /**
+   * 发一条桥接帧。
+   *
+   * 元数据字段是**必需的**：真机日志里桌面端发来的每帧都带
+   * `fragmentCount` / `fragmentIndex` / `messageBytes` / `checksum{crc32}`，
+   * 而我们的帧一个都没有，于是桌面端在收到我们第一个请求后立刻判定
+   * `bridge-degraded: rpc-transport-fault` 并停发。
+   */
   sendRpcFrame(payload) {
     if (!this.bridge) return
     this.rpcSeq += 1
+    const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload)
     this.sendEnvelope({
       zcode_type: 'rpc-frame',
       bridgeSessionId: this.bridge.bridgeSessionId,
       bridgeGeneration: this.bridge.bridgeGeneration,
-      recoveryId: this.bridge.recoveryId,
+      ...(this.bridge.recoveryId ? { recoveryId: this.bridge.recoveryId } : {}),
       seq: this.rpcSeq,
-      dataBase64: base64(payload),
+      messageSeq: this.rpcSeq,
+      fragmentCount: 1,
+      fragmentIndex: 0,
+      messageBytes: bytes.length,
+      checksum: { algorithm: 'crc32', value: crc32Hex(bytes) },
+      dataBase64: base64(bytes),
     })
+  }
+
+  /** 按字节拼分片。载荷是二进制的，不能像文本帧那样拼字符串（会把多字节序列切坏）。 */
+  assembleFragments(payload, index, total, part) {
+    const key = String(payload.messageSeq ?? `${payload.bridgeGeneration ?? 0}:${index}`)
+    let slot = this.bridgeParts.get(key)
+    if (!slot) {
+      slot = { parts: new Map(), count: total }
+      this.bridgeParts.set(key, slot)
+      // 上限保护：真机上出过 `rpc-transport-fault`，不明来源的分片不能无限攒。
+      if (this.bridgeParts.size > 16) this.bridgeParts.delete(this.bridgeParts.keys().next().value)
+    }
+    if (slot.parts.has(index)) return null
+    try {
+      slot.parts.set(index, base64Decode(part))
+    } catch {
+      this.bridgeParts.delete(key)
+      return null
+    }
+    if (slot.parts.size < total) return null
+
+    let length = 0
+    for (const chunk of slot.parts.values()) length += chunk.length
+    const joined = new Uint8Array(length)
+    let offset = 0
+    for (let i = 0; i < total; i++) {
+      const chunk = slot.parts.get(i)
+      if (!chunk) return null
+      joined.set(chunk, offset)
+      offset += chunk.length
+    }
+    this.bridgeParts.delete(key)
+    return joined
+  }
+
+  /** 收到 bridge-degraded：桌面端已经判定这条桥接不可用，如实报出来而不是继续干等。 */
+  onBridgeDegraded(reason) {
+    this.pushLog('!', `bridge-degraded: ${reason}`)
+    this.bridgeReady = false
+    this.handlers.onBridgeFailed?.(`电脑端判定桥接故障：${reason}`)
   }
 
   ackRpcFrame(ackMessageSeq) {
@@ -402,6 +499,12 @@ export class RelaySession {
     if (nextLed) this.setLed(nextLed)
 
     const payload = root.payload ?? root
+
+    // 桌面端判定桥接不可用（真机上出现过 reason: rpc-transport-fault——那正是收不到 ACK 的后果）
+    if (payload?.zcode_type === 'bridge-degraded') {
+      this.onBridgeDegraded(payload.reason ?? 'unknown')
+      return
+    }
 
     // 阶段二：桥接 RPC 帧
     if (payload?.zcode_type === 'rpc-frame') {
@@ -556,36 +659,54 @@ export class RelaySession {
     this.handlers.onTopicFrame?.(frame)
   }
 
+  /**
+   * 处理一条入站的桥接帧。
+   *
+   * 两个从真机日志里定死的约定，之前都搞错了：
+   *
+   * 1. **`dataBase64` 里是裸的 channel 载荷，没有 13 字节帧头。**
+   *    帧头是 CLI/NDJSON 那条传输用的；走中继时，头部字段被搬进了 JSON 信封
+   *    （`seq` / `messageSeq` / `messageBytes` / `checksum` / `fragmentIndex`）。
+   *    我原先用 FrameReader 去读前 13 字节，读到的全是垃圾，于是桌面端反复发来的
+   *    `Initialize`（`BAIGyAEA` = serialize([200]) + serialize(undefined)）**一次都没被认出来**。
+   *
+   * 2. **每一帧都必须回 ACK**（`rpc-frame-ack {ackMessageSeq}`）。桌面端收不到就每 5–10 秒
+   *    重发同一帧，最后判定 `bridge-degraded: rpc-transport-fault` 并停止发送——
+   *    这正是之前一直看不懂的那个故障名。
+   */
   handleRpcFrame(payload) {
-    if (payload.ackMessageSeq !== undefined) this.ackRpcFrame(payload.ackMessageSeq)
-    if (!payload.dataBase64) return
+    // 先 ACK：不 ACK 的话后面做什么都没意义。
+    if (payload.messageSeq !== undefined) this.ackRpcFrame(payload.messageSeq)
+
+    if (payload.zcode_type === 'bridge-degraded') return
+
+    const part = payload.dataBase64
+    if (typeof part !== 'string' || !part) return
+
+    // 分片：单帧直接解；多帧按 logicalFrameId 攒齐（这里的帧没有 13 字节头，
+    // 分片信息同样在 JSON 里，所以拼的是 channel 载荷本身）。
+    const total = Number(payload.fragmentCount ?? 1)
+    const index = Number(payload.fragmentIndex ?? 0)
     let bytes
-    try {
-      bytes = base64Decode(payload.dataBase64)
-    } catch {
-      return
-    }
-    this.frameReader.acceptChunk(bytes)
-    for (const frame of this.frameReader.readFrames()) {
-      switch (frame.type) {
-        case ProtocolMessageType.Regular: {
-          try {
-            const decoded = decodeResponse(frame.data)
-            this.pushLog('·', `rpc response type=${decoded.type} id=${decoded.id}`)
-            this.channel?.handleResponse(decoded)
-          } catch (error) {
-            this.pushLog('!', `rpc decode failed: ${error?.message ?? error}`)
-            this.handlers.onError?.({ code: 'RPC_DECODE', message: String(error?.message ?? error) })
-          }
-          break
-        }
-        case ProtocolMessageType.KeepAlive:
-          // 用"最后收到的 id"回 ACK，而不是回自己的计数——官方就是这么做的。
-          this.sendFrame(ProtocolMessageType.Ack, frame.id, frame.id)
-          break
-        default:
-          break
+    if (total > 1) {
+      bytes = this.assembleFragments(payload, index, total, part)
+      if (bytes === null) return
+    } else {
+      try {
+        bytes = base64Decode(part)
+      } catch {
+        this.pushLog('!', 'rpc-frame 的 dataBase64 解不开')
+        return
       }
+    }
+
+    try {
+      const decoded = decodeResponse(bytes)
+      this.pushLog('·', `rpc response type=${decoded.type} id=${decoded.id}`)
+      this.channel?.handleResponse(decoded)
+    } catch (error) {
+      this.pushLog('!', `rpc decode failed: ${error?.message ?? error}`)
+      this.handlers.onError?.({ code: 'RPC_DECODE', message: String(error?.message ?? error) })
     }
   }
 
@@ -616,13 +737,12 @@ export class RelaySession {
     this.bridgeReady = false
     if (this.closedByUs) return
     this.setState('closed')
-    // 终态判定必须用官方关闭码与九条文本原因。
-    // 早先这里是 `onFrameRoot({type:'error', code: reason})`——把**关闭原因字符串**当成
-    // 错误码去比，任何一次关闭（reason 甚至可能是空串）都会落进"未知错误码"分支从而被判成
-    // 终态，界面于是显示「配对已失效」。网络一抖就"失效"就是这么来的。
-    const terminal = isTerminalClose(code, reason)
-    this.pushLog('·', `socket closed code=${code} reason=${reason || '-'} terminal=${terminal}`)
-    this.handlers.onClosed?.({ code, reason, terminal })
+    // 四种关闭的处置方式完全不同，必须分开——见 relay-led 的 classifyClose。
+    // 早先这里把它们混成一个"终态"，于是"另一个客户端占着设备"被报成「配对已失效」，
+    // 而用户的链接其实完全没问题。
+    const kind = classifyClose(code, reason)
+    this.pushLog('·', `socket closed code=${code} reason=${reason || '-'} kind=${kind}`)
+    this.handlers.onClosed?.({ code, reason, kind, terminal: kind === CLOSE_REPAIR })
   }
 
   setState(state) {

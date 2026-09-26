@@ -69,41 +69,71 @@ export function onSocketEvent(event) {
   return null
 }
 
-/**
- * 中继宣告会话终结的**关闭码**（来自官方前端常量）。
- *
- * 判定"这条连接还会不会自愈"必须用这些码，而不是把关闭原因字符串当错误码去比——
- * 后者会把任何一次普通断开都判成终态，界面于是假报「配对已失效」。
- */
-export const TERMINAL_CLOSE_CODES = new Set([
+/** 真的需要重新配对：链接失效/过期、或这条移动连接不被承认。 */
+export const REPAIR_CLOSE_CODES = new Set([
   4004, // SessionNotFound
-  4009, // SessionConflict
-  4010, // DesktopDisconnected
   4011, // SessionExpired
-  4012, // WorkspaceClosed
   4013, // InvalidMobileConnection
 ])
 
-export function isTerminalCloseCode(code) {
-  return TERMINAL_CLOSE_CODES.has(Number(code))
+/**
+ * 被别的客户端接管：**协议里一个设备同时只允许一条移动连接**，
+ * 官方远控页面或另一台手机占了它。这**不是**配对失效——让用户去重新扫码是误导，
+ * 他真正要做的只是关掉那边。
+ */
+export const TAKEOVER_CLOSE_CODES = new Set([
+  4009, // SessionConflict
+])
+
+/** 电脑端那一侧没了（远控页面关掉、工作区关闭）。等它回来即可，不必重新配对。 */
+export const DESKTOP_GONE_CLOSE_CODES = new Set([
+  4010, // DesktopDisconnected
+  4012, // WorkspaceClosed
+])
+
+export const CLOSE_REPAIR = 'repair'
+export const CLOSE_TAKEOVER = 'takeover'
+export const CLOSE_DESKTOP_GONE = 'desktop-gone'
+export const CLOSE_TRANSIENT = 'transient'
+
+/**
+ * 把一次关闭归到四类之一——这四类的处理方式完全不同，混在一起说就会误报。
+ *
+ * 判定顺序：先看原因文本（官方会把原因写清楚），再看关闭码。
+ * 拿不准的一律归为 transient（自动重连），因为误报"需要重新配对"会逼用户做一件没必要的事。
+ */
+export function classifyClose(code, reason) {
+  const text = String(reason ?? '').toLowerCase()
+  if (text.includes('kicked') || text.includes('session-conflict') || text.includes('session_conflict')) {
+    return CLOSE_TAKEOVER
+  }
+  if (text.includes('desktop-disconnected') || text.includes('workspace-closed')) {
+    return CLOSE_DESKTOP_GONE
+  }
+  if (text.includes('session-not-found') || text.includes('session-expired') || text.includes('invalid-mobile-connection')) {
+    return CLOSE_REPAIR
+  }
+
+  const numeric = Number(code ?? 0)
+  if (TAKEOVER_CLOSE_CODES.has(numeric)) return CLOSE_TAKEOVER
+  if (DESKTOP_GONE_CLOSE_CODES.has(numeric)) return CLOSE_DESKTOP_GONE
+  if (REPAIR_CLOSE_CODES.has(numeric)) return CLOSE_REPAIR
+  return CLOSE_TRANSIENT
+}
+
+/**
+ * 这次关闭是否应该判为终态（需要用户动作）。
+ *
+ * 只有"真的要重新配对"才算终态。被接管、电脑端离线都只是暂时的，交给自动重连。
+ */
+export function isTerminalClose(code, reason) {
+  return classifyClose(code, reason) === CLOSE_REPAIR
 }
 
 /** 关闭原因是否属于终态（界面据此决定是提示"重新扫码"还是静默重连）。 */
 export function isTerminalReason(reason) {
   const text = String(reason ?? '')
   return TERMINAL_REASONS.some((token) => text.includes(token))
-}
-
-/**
- * 这次关闭是否应该被判为终态。
- *
- * 顺序很重要：先看原因文本，再看关闭码，都没有就**不算**终态。
- * 默认不算是有意的——终态会让界面提示"请重新扫码"，而一次网络抖动不该逼用户做这件事；
- * 判错方向最多是多自动重连几次，代价远小于误报。
- */
-export function isTerminalClose(code, reason) {
-  if (isTerminalReason(reason)) return true
-  return TERMINAL_CLOSE_CODES.has(Number(code ?? 0))
 }
 
 /**

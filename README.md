@@ -42,9 +42,16 @@ npx @deepseek-ai/dsh web
 
 ### 3. 手机本机跑 dsh（非 root）
 
-安装 [dsh-phone](https://github.com/railgun0325/dsh-phone) 的 **Shizuku 版**并完成一键部署，
-然后在 shou 里添加 `http://127.0.0.1:3080`。这一步不需要 root，但需要一次性的无线调试配对。
-细节与平台约束见 [docs/SETUP.md](docs/SETUP.md)。
+两条路，任选：
+
+- **shou 自己部署**（推荐）：在**本机 dsh** 端点页面点「用 shou 部署 dsh 运行时」。
+  原生插件 `shou-dsh` 会经 Shizuku（非 root）装好 Termux + Node + dsh 并启动 dsh web。
+  首次约 5–15 分钟，需要一次性的无线调试配对（约 30 秒，不需要电脑）。
+  细节、打包方式与已验证/未验证的边界见 [docs/NATIVE-PLUGIN.md](docs/NATIVE-PLUGIN.md)。
+- **用 dsh-phone 的 APK**：同样在这个页面点「下载并安装 dsh-phone」，
+  装好后由它完成一键部署；shou 负责下载、唤起安装器与后续接入。
+
+两条路的结果一样：在 shou 里添加 `http://127.0.0.1:3080` 即可使用。
 
 ---
 
@@ -53,6 +60,8 @@ npx @deepseek-ai/dsh web
 **已实现并通过单测**：端点导入与去重、扫码/粘贴、重命名/换链接/删除/排序、连接状态灯、
 会话索引（两路数据合并、排序、日期分组、相对时间）、通知差分（审批 0→>0 才通知、归零才撤回、
 首见终态不通知）、应用锁、主题与双语、dsh 面板多实例常驻、中继认证握手与桥接 RPC 编解码。
+**本机 dsh 部署**有两条路：原生插件 `shou-dsh`（经 Shizuku 非 root 部署，
+`javac` + `d8` 已通过编译与 dex 验证，**真机流程未验证**）与「下载并安装 dsh-phone」。
 
 **还需要在真机上验收**：中继的数据面（任务列表 / 会话历史 / 远程发送与审批）。
 发送与审批默认**关闭**，在「设置 → 实验性写入」里打开——协议按官方开源代码还原，

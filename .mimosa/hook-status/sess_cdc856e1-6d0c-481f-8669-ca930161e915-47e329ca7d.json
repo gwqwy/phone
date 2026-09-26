@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-09-23T15:40:31.476Z",
+  "recordedAt": "2026-09-25T05:57:13.729Z",
   "sessionId": "sess_cdc856e1-6d0c-481f-8669-ca930161e915",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "docs/VERIFY.md",
-  "outcome": "clear",
-  "coverage": "complete",
+  "file": "tests/relay-handshake.test.js",
+  "outcome": "inconclusive",
+  "coverage": "partial",
   "findingCount": 0,
-  "durationMs": 5,
+  "durationMs": 10022,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

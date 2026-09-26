@@ -13,5 +13,8 @@
   },
   "uniapp": {
     "note": "client/ 是 HBuilderX 项目，HBuilderX 直接打开 client 目录即可运行/发行。根目录的 package.json 只用于跑单测与探针，不参与打包。"
+  },
+  "devDependencies": {
+    "vue": "^3.5.43"
   }
 }

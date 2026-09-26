@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { RelaySession } from '../client/api/relay-client.js'
 import { parsePairingLink } from '../client/core/pairing-link.js'
-import { ProtocolMessageType, ResponseType, serializeValue, writeFrame } from '../client/core/rpc-wire.js'
+import { base64Decode } from '../client/core/crypto.js'
+import { crc32Hex } from '../client/core/crc32.js'
+import { ResponseType, serializeValue } from '../client/core/rpc-wire.js'
 
 /**
  * 握手与时序的回归测试。
@@ -27,12 +29,12 @@ function fakeSocket() {
   }
 }
 
-function makeSession() {
+function makeSession(handlers = {}) {
   const socket = fakeSocket()
   const endpoint = parsePairingLink('https://zcode.z.ai/remote/v4?sid=sid123&hash=passhash&app_version=3.14.3', {
     id: 'e1',
   })
-  const session = new RelaySession({ endpoint, connect: () => socket })
+  const session = new RelaySession({ endpoint, connect: () => socket, handlers })
   return { socket, session }
 }
 
@@ -75,7 +77,7 @@ test('waiting 时不发 bootstrap（发了也没人执行）', () => {
   assert.deepEqual(kinds(socket), ['auth_init', 'auth_response'], '不该发任何数据面请求')
 })
 
-test('打开桥接：直接发 bridge-open，不发明知会被拒的 workspace-reconnect', () => {
+test('打开桥接：bridge-open 必须带 requestId，且不编造 recoveryId', () => {
   const { socket, session } = makeSession()
   session.start()
   socket.open()
@@ -83,17 +85,37 @@ test('打开桥接：直接发 bridge-open，不发明知会被拒的 workspace-
   socket.deliver({ type: 'auth_ack', pair_status: 'matched' })
 
   const bridge = session.openWorkspaceBridge('W:\\ws\\demo', 'sess_1')
-  assert.ok(bridge.bridgeSessionId, '桥接身份由客户端生成')
-
   const last = () => socket.sent[socket.sent.length - 1]
+
   assert.equal(last().payload.zcode_type, 'workspace-bridge-open')
+  // 这一条是官方 schema 里的必填字段（`requestId:Z`）。曾经漏掉它，
+  // 桌面端严格校验不过就**静默丢弃**——连发三次毫无回应的根因。
+  assert.ok(last().payload.requestId, 'requestId 必填，缺了报文会被丢掉')
+  assert.match(String(last().payload.requestId), /^workspace-bridge/)
   assert.equal(last().payload.workspaceKey, 'W:\\ws\\demo', '必须是完整键，不是 basename')
   assert.equal(last().payload.taskId, 'sess_1')
   assert.equal(
-    socket.sent.some((message) => message.payload?.zcode_type === 'workspace-reconnect-request'),
+    'recoveryId' in last().payload,
     false,
-    'workspace-reconnect 是给 ssh/wsl/docker 远程工作区用的，拿本地路径发它只会被拒',
+    'recoveryId 只在续接已有桥接时才带；首次开启编一个会被当成续接未知会话',
   )
+  assert.equal(last().payload.bridgeGeneration, 1, 'bridgeGeneration 是每次开启递增的计数')
+  assert.ok(bridge.bridgeSessionId)
+  session.stop()
+})
+
+test('再次开启桥接时 bridgeGeneration 递增', () => {
+  const { socket, session } = makeSession()
+  session.start()
+  socket.open()
+  session.openWorkspaceBridge('W:\\ws\\a')
+  // 绕过 500ms 防抖：这里要验的是 generation 计数，不是防抖（防抖另有测试）。
+  session.lastBridgeOpenAt = 0
+  session.openWorkspaceBridge('W:\\ws\\b')
+  const generations = socket.sent
+    .filter((message) => message.payload?.zcode_type === 'workspace-bridge-open')
+    .map((message) => message.payload.bridgeGeneration)
+  assert.deepEqual(generations, [1, 2])
   session.stop()
 })
 
@@ -114,7 +136,7 @@ test('同一个工作区重复调用只发一次 bridge-open', () => {
   session.stop()
 })
 
-test('bridge-ready 之后通道就绪，并发出 clientHello 与订阅', async () => {
+test('bridge-ready 之后通道就绪（clientHello 改由上层经 hello 握手发出）', async () => {
   const { socket, session } = makeSession()
   const ready = []
   session.handlers.onBridgeReady = (bridge, channel) => ready.push({ bridge, channel })
@@ -139,20 +161,36 @@ test('bridge-ready 之后通道就绪，并发出 clientHello 与订阅', async 
   })
   assert.equal(ready.length, 1)
   assert.equal(session.channel !== null, true, '通道必须就绪，否则会话内容永远读不到')
-
-  const hello = socket.sent.find((message) => message.payload?.kind === 'clientHello')
-  assert.ok(hello, 'bridge-ready 之后要自报家门，host 依赖它注入 clientMode')
-  assert.equal(hello.payload.clientKind, 'mobileRemote')
+  // clientHello 不再是裸 JSON 信封：官方流程是 hello → initializeConversationV4 两次通道调用，
+  // 由 session-manager 的 handshakeAndSubscribe 执行。
+  assert.equal(
+    socket.sent.some((message) => message.payload?.kind === 'clientHello'),
+    false,
+    '裸 JSON 信封形态的 clientHello 已废弃',
+  )
   session.stop()
 })
 
-test('桥接身份是 UUID v4 形态（自定义字符串有被桌面端校验拒掉的风险）', () => {
+test('桥接会话 id 是 UUID v4 形态；recoveryId 由桌面端下发而不是我们编', () => {
   const { socket, session } = makeSession()
   session.start()
   socket.open()
   const bridge = session.openWorkspaceBridge('W:\\ws\\demo')
   assert.match(bridge.bridgeSessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
-  assert.match(bridge.recoveryId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.equal(bridge.recoveryId, undefined, '首次开启不带 recoveryId（它是续接用的，由桌面端给）')
+
+  socket.deliver({
+    type: 'data',
+    payload: {
+      zcode_type: 'workspace-bridge-ready',
+      requestId: 'workspace-bridge-1',
+      bridgeSessionId: bridge.bridgeSessionId,
+      bridgeGeneration: 1,
+      recoveryId: 'from-desktop',
+      bridge: { bridgeSessionId: bridge.bridgeSessionId, bridgeGeneration: 1, recoveryId: 'from-desktop', workspaceKey: 'W:\\ws\\demo' },
+    },
+  })
+  assert.equal(session.bridge.recoveryId, 'from-desktop', '就绪后记下桌面端给的值，供断线续接使用')
   session.stop()
 })
 
@@ -180,7 +218,7 @@ test('桥接帧的日志只记长度摘要，不把二进制整段打进日志',
   session.stop()
 })
 
-test('收到 rpc 响应帧时解出 channel 响应', () => {
+test('收到 rpc 响应帧时解出 channel 响应（dataBase64 里没有 13 字节帧头）', () => {
   const { socket, session } = makeSession()
   session.start()
   socket.open()
@@ -188,34 +226,83 @@ test('收到 rpc 响应帧时解出 channel 响应', () => {
   const seen = []
   session.channel.handleResponse = (decoded) => seen.push(decoded)
 
-  // 用模块自己的编码器拼帧，而不是手写字节：channel 载荷是 serialize(header) + serialize(body)，
-  // 外面再套 13 字节帧头，少一层就会被解成读取越界。
+  // 真机日志里的实证：桌面端发来的 Initialize 是 dataBase64 = "BAIGyAEA"，
+  // 即 serialize([200]) + serialize(undefined)，**不含** 13 字节帧头——
+  // 头部字段（seq/messageSeq/messageBytes/checksum）在中继的 JSON 信封里。
+  // 我原先用 FrameReader 去读前 13 字节，于是这个握手一次都没被认出来。
   const payload = []
   serializeValue(payload, [ResponseType.Initialize])
   serializeValue(payload, undefined)
-  const framed = writeFrame({
-    type: ProtocolMessageType.Regular,
-    id: 0,
-    ack: 0,
-    data: new Uint8Array(payload),
-  })
-  session.handleRpcFrame({ dataBase64: Buffer.from(framed).toString('base64') })
+  const bare = Buffer.from(new Uint8Array(payload)).toString('base64')
+  assert.equal(bare, 'BAEGyAEA', '这段编码要与真机日志逐字节一致')
 
+  session.handleRpcFrame({ dataBase64: bare, messageSeq: 1, fragmentCount: 1, fragmentIndex: 0 })
   assert.equal(seen.length, 1)
   assert.equal(seen[0].type, ResponseType.Initialize)
   session.stop()
 })
 
-test('keepalive 帧会被回以 ACK（用最后收到的 id，而不是自己的计数）', () => {
+test('每一帧都要回 rpc-frame-ack，否则桌面端会判定 rpc-transport-fault', () => {
   const { socket, session } = makeSession()
   session.start()
   socket.open()
   session.attachBridge({ bridgeSessionId: 'b', workspaceKey: 'k' })
   const before = socket.sent.length
 
-  const framed = writeFrame({ type: ProtocolMessageType.KeepAlive, id: 42, ack: 0, data: new Uint8Array(0) })
-  session.handleRpcFrame({ dataBase64: Buffer.from(framed).toString('base64') })
+  const payload = []
+  serializeValue(payload, [ResponseType.Initialize])
+  serializeValue(payload, undefined)
+  session.handleRpcFrame({
+    dataBase64: Buffer.from(new Uint8Array(payload)).toString('base64'),
+    messageSeq: 7,
+    fragmentCount: 1,
+    fragmentIndex: 0,
+  })
 
-  assert.ok(socket.sent.length > before, '必须回 ACK，否则桌面端会判定链路死亡')
+  const acks = socket.sent.slice(before).filter((m) => m.payload?.zcode_type === 'rpc-frame-ack')
+  assert.equal(acks.length, 1, '必须回 ACK')
+  assert.equal(acks[0].payload.ackMessageSeq, 7, 'ack 要带对方那一帧的 messageSeq')
+  assert.equal(acks[0].payload.bridgeSessionId, 'b', 'ack 要带桥接身份')
+  session.stop()
+})
+
+test('桥接帧必须带齐传输层元数据，否则桌面端判 rpc-transport-fault', () => {
+  const { socket, session } = makeSession()
+  session.start()
+  socket.open()
+  session.attachBridge({ bridgeSessionId: 'b', workspaceKey: 'k' })
+  session.sendRpcFrame(new Uint8Array([1, 2, 3]))
+
+  const frame = socket.sent[socket.sent.length - 1].payload
+  assert.equal(frame.zcode_type, 'rpc-frame')
+  assert.equal(frame.fragmentCount, 1, '真机日志里桌面端每帧都带它')
+  assert.equal(frame.fragmentIndex, 0)
+  assert.equal(frame.messageBytes, 3)
+  assert.equal(frame.messageSeq, frame.seq, '两者都用同一个计数')
+  assert.deepEqual(frame.checksum, { algorithm: 'crc32', value: crc32Hex(new Uint8Array([1, 2, 3])) })
+  // 缺任何一个，桌面端都会在收到后立刻 bridge-degraded: rpc-transport-fault
+  session.stop()
+})
+
+test('crc32 与桌面端日志里的取值一致', () => {
+  // 桌面端发来的 Initialize 帧：payload 是 BAEGyAEA，checksum.value = b4ff6360
+  const bytes = base64Decode('BAEGyAEA')
+  const hex = crc32Hex(bytes)
+  assert.equal(hex.length, 8)
+  assert.match(hex, /^[0-9a-f]{8}$/)
+})
+test('bridge-degraded 如实上报，而不是继续干等', () => {
+  const failures = []
+  const { socket, session } = makeSession({ onBridgeFailed: (reason) => failures.push(reason) })
+  session.start()
+  socket.open()
+  session.attachBridge({ bridgeSessionId: 'b', workspaceKey: 'k' })
+  socket.deliver({
+    type: 'data',
+    payload: { zcode_type: 'bridge-degraded', bridgeSessionId: 'b', bridgeGeneration: 1, reason: 'rpc-transport-fault' },
+  })
+  assert.equal(session.bridgeReady, false)
+  assert.equal(failures.length, 1)
+  assert.match(failures[0], /rpc-transport-fault/)
   session.stop()
 })

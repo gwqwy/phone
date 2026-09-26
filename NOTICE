@@ -27,17 +27,34 @@ Copyright (c) 2026 ZRemote contributors
 Copyright (c) 2026 railgun0325
 
 **用了什么**：这是把 DeepSeek Harness 装进安卓手机的项目，含 root 版与非 root（Shizuku）版。
+shou 现在有两条与它相关的路，其中**第二条引入了它的代码**：
 
-- 非 root 路线的事实依据：Shizuku 版以 adb shell 级（uid 2000）运行，Termux + Node.js 是
-  dsh 的运行时，一次性无线调试配对不需要电脑。
-- Android 平台约束（它记录的 g1–g12 关卡）：应用沙箱下任何 app uid 都无法 `open('/data/data')`、
-  硬链接被 SELinux 拒绝所以原子发布必须用 rename、Android 没有 flock 原生模块、
-  WebView 的 `<input type=file>` 必须由宿主实现 `onShowFileChooser`、MIUI 会冻结 Termux
-  所以看门狗与电池豁免是必需品。
-- 访问面：dsh web 在本机 `127.0.0.1:3080`；Shizuku 桥在本机 `127.0.0.1:36527`。
+1. **下载并安装它的 APK**（`client/api/dsh-phone.js`）：不引入任何代码，只是把它的
+   官方 release 交给系统安装器。
+2. **原生插件 `client/nativeplugins/shou-dsh/`**：让 shou 自己完成非 root 部署。
+   这里**复制了它的部署载荷与实现思路**，来源逐条列明：
+   - `assets/payload/` 下的 13 个脚本与 `plugin/` 目录（`setup-shizuku.sh`、`start-dsh.sh`、
+     `boot-dsh-shizuku.sh`、7 个 `patch-dsh-*.mjs`、`verify-*.mjs`、`cordis.patch.yml`、
+     以及 `dsh-android-control` 插件）**原样取自它的 `scripts/` 与 `plugin/`**；
+   - `ShizukuExec.java` 是它的同文件移植（反射私有 `newProcess`、轮询 `exitValue`）；
+   - `Deployer.java` 的 12 步流程、`run-as` 通道、`dd bs=1 count=N` 推载荷、
+     `pm install -r -S` 流式装包，均照它的 `App/shizuku` 实现。
+   - 上游 MIT 许可证全文随附于 `client/nativeplugins/shou-dsh/LICENSE.upstream-dsh-phone.txt`。
 
-**是否引入代码**：否。shou 不含任何 Java/Kotlin 代码，也不内置部署器——dsh-phone 的
-Shizuku 版 APK 由用户单独安装，shou 只作为客户端接入它启动的 dsh。
+**与上游的两处刻意差异**（都在代码里注明了原因）：
+
+- 不捆绑第三方 APK（Termux / Termux:Boot / Termux:API / Shizuku），改为部署时下载，
+  以免把 shou 的包体撑大；代价是首次部署需要网络可达 GitHub 或其镜像。
+- 传输载荷时**遍历整个载荷目录**，而不是照抄上游那份只有 10 个文件的硬编码清单——
+  那份清单漏掉了 5 个补丁器与两个校验脚本，而上游自己的构建脚本注释就警告过：
+  「a payload that ships a stale patcher silently re-introduces the bug it was written to fix」。
+
+**Android 平台约束**（它记录的 g1–g12 关卡，对 shou 同样成立）：应用沙箱下任何 app uid 都无法
+`open('/data/data')`、硬链接被 SELinux 拒绝所以原子发布必须用 rename、Android 没有 flock
+原生模块、WebView 的 `<input type=file>` 必须由宿主实现 `onShowFileChooser`、
+MIUI 会冻结 Termux 所以看门狗与电池豁免是必需品。
+
+**访问面**：dsh web 在本机 `127.0.0.1:3080`；它的 Shizuku 桥在本机 `127.0.0.1:36527`。
 
 ## 3. shaobeichen/dsh-pocket — GPL-2.0 许可（**未被引入**）
 

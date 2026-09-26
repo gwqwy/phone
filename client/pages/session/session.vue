@@ -10,8 +10,11 @@
     <view v-if="!items.length" class="shou-empty">
       <view class="shou-empty__title">{{ emptyTitle }}</view>
       <view>{{ emptyBody }}</view>
-      <view v-if="bridge === 'timeout'" class="shou-btn shou-empty__btn" @tap="retryBridge">
-        {{ t('retryBridge') }}
+      <view class="shou-empty__row">
+        <view v-if="bridge === 'timeout' || lastError" class="shou-btn shou-empty__btn" @tap="retryBridge">
+          {{ t('retryBridge') }}
+        </view>
+        <view class="shou-btn shou-btn--ghost shou-empty__btn" @tap="openDiag">{{ t('diag') }}</view>
       </view>
     </view>
 
@@ -101,7 +104,12 @@ onLoad((query) => {
   if (query?.reason) lastError.value = decodeURIComponent(query.reason)
 
   const endpoint = endpoints.get(endpointId.value)
-  if (!endpoint) return
+  if (!endpoint) {
+    // 没有端点就没有"正在建立通道"这回事——早先这里直接 return，页面会永远停在等待态。
+    lastError.value = t('endpointMissing')
+    bridge.value = 'timeout'
+    return
+  }
   startBridge()
 })
 
@@ -158,12 +166,16 @@ const bridgeFailureText = computed(() => {
 })
 
 const emptyTitle = computed(() => {
+  // 失败信息优先：早先这里只看桥接状态，于是读取出错也被"正在建立桥接通道…"盖住，
+  // 用户看到的是等待，而真相是已经失败了。
+  if (lastError.value) return t('historyFailed')
   if (bridge.value === 'waiting') return t('bridgeWaiting')
   if (bridge.value === 'timeout') return t('bridgeTimeout')
   return t('noTimeline')
 })
 
 const emptyBody = computed(() => {
+  if (lastError.value) return lastError.value
   if (bridge.value === 'waiting') return t('bridgeWaitingHint')
   if (bridge.value === 'timeout') return bridgeFailureText.value
   return t('noTimelineHint')
@@ -173,12 +185,15 @@ async function loadHistory() {
   try {
     const result = await readRows(endpointId.value, sessionId.value)
     if (result.payload) {
-      items.value = toTimeline(result.payload)
-      lastError.value = ''
+      const rows = toTimeline(result.payload)
+      items.value = rows
       via.value = result.via
-    } else if (result.error) {
-      lastError.value = `${t('historyFailed')}：${result.error}`
+      // 拿到载荷却解析不出行，是**解析**问题（多半是字段名对不上），不是"会话为空"。
+      // 这两种情况的处理方式完全不同，所以必须分开说，否则我会一直在错误的方向上找原因。
+      lastError.value = rows.length ? '' : t('rowsUnparsed')
+      return
     }
+    if (result.error) lastError.value = `${t('historyFailed')}：${result.error}`
   } catch (error) {
     lastError.value = `${t('historyFailed')}：${error?.message ?? error}`
   }
@@ -190,7 +205,12 @@ function onFrame(frame) {
 }
 
 function openDiag() {
-  safeNavigate(`/pages/diag/diag?id=${endpointId.value}`, { message: t('openFailed') })
+  // 把会话 id 带过去：诊断页那个"用 platform-request 读这条会话"的试探要问对目标，
+  // 否则它会去问默认会话，结论对当前问题没有意义。
+  safeNavigate(
+    `/pages/diag/diag?id=${endpointId.value}&sessionId=${encodeURIComponent(sessionId.value)}`,
+    { message: t('openFailed') },
+  )
 }
 
 function onInput(event) {
@@ -351,6 +371,18 @@ async function resolve(outcome) {
 .shou-empty__btn {
   margin: 20px auto 0;
   max-width: 200px;
+}
+
+.shou-empty__row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.shou-empty__row .shou-empty__btn {
+  margin: 20px 0 0;
+  min-width: 120px;
 }
 
 .shou-screen {

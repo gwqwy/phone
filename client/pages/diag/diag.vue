@@ -9,15 +9,6 @@
       </view>
     </view>
 
-    <view class="shou-section-label">{{ t('diagReadRows') }}</view>
-    <view class="shou-card">
-      <view class="shou-sub shou-diag__hint">{{ t('diagReadRowsHint') }}</view>
-      <view class="shou-diag__buttons">
-        <view class="shou-chip shou-chip--btn" @tap="readRowsProbe">{{ t('diagReadRows') }}</view>
-      </view>
-      <view v-if="probeResult" class="shou-diag__probe">{{ probeResult }}</view>
-    </view>
-
     <view class="shou-section-label">{{ t('diagProbe') }}</view>
     <view class="shou-card">
       <view class="shou-sub shou-diag__hint">{{ t('diagProbeHint') }}</view>
@@ -30,6 +21,7 @@
           {{ probe.method }}
         </view>
       </view>
+      <view v-if="probeResult" class="shou-diag__probe">{{ probeResult }}</view>
     </view>
 
     <view class="shou-section-label">{{ t('diagCrossCheck') }}</view>
@@ -69,7 +61,6 @@ import {
   connectEndpoint,
   disconnectEndpoint,
   logFor,
-  readRowsViaPlatform,
   resolveWorkspaceKey,
   tryPlatform,
 } from '../../api/session-manager.js'
@@ -77,31 +68,28 @@ import {
 const endpointId = ref('')
 const tick = ref(0)
 const probeResult = ref('')
+/** 从会话页进来时带上的目标会话；没有就退回"桌面端当前活动会话"。 */
+const focusSessionId = ref('')
 
 /**
- * 试探用的候选方法名。
+ * 试探用的方法名。
  *
- * 前两条是真正的目标：`v4/conversation/rowsRange` 是会话内容的读取方法，
- * 参数形状来自 OSS 的 `v4ConversationRowsRangeParamsSchema`（`limit` 必填）。
- * 其余几条是"对照组"——它们若能应答，说明 platform-request 这条路整体是通的，
- * 问题只出在方法名或参数上。
+ * 从官方前端 bundle 里查到 `platform-request.method` 是**封闭枚举**，只有下面这些值，
+ * 全是 Docker / WSL / SSH / MCP 相关。它**不是**通用 RPC 代理——所以以前拿
+ * `v4/conversation/rowsRange` 去问必然是白等超时（那条猜测已删）。
+ * 这里只列真实存在的方法：它们能应答就说明这条通道本身是通的；
+ * 而会话内容不在这条通道上，只能经桥接读。
  */
 const probeMethods = [
-  { method: 'v4/conversation/rowsRange', args: () => ({ sessionId: activeSessionId(), limit: 20 }) },
-  { method: 'v4/controller/subscribe', args: () => ({ connectionId: '' }) },
-  { method: 'session/list', args: () => ({}) },
-  { method: 'workspace/list', args: () => ({}) },
+  { method: 'isDockerAvailable', args: () => ({}) },
+  { method: 'listWSLDistros', args: () => ({}) },
+  { method: 'listSSHConfigAliases', args: () => ({}) },
+  { method: 'loadMcpFromUserDirectory', args: () => ({}) },
 ]
-
-/** 桌面端在 bootstrap 里告诉过我们它当前打开的是哪条会话；没有就用任务列表第一条。 */
-function activeSessionId() {
-  const fromView = state.initialView?.[endpointId.value]?.activeTaskId
-  if (fromView) return fromView
-  return (state.tasks[endpointId.value] ?? [])[0]?.sessionId ?? ''
-}
 
 onLoad((query) => {
   endpointId.value = query?.id ?? ''
+  focusSessionId.value = query?.sessionId ? decodeURIComponent(query.sessionId) : ''
 })
 
 onShow(() => refresh())
@@ -158,22 +146,6 @@ async function probeMethod(probe) {
     probeResult.value = `${probe.method} → ${JSON.stringify(response).slice(0, 1500)}`
   } catch (error) {
     probeResult.value = `${probe.method} → 失败：${error?.message ?? error}`
-  }
-}
-
-/** 决定性试验：直接拿 v4 方法名要会话内容。 */
-async function readRowsProbe() {
-  const sessionId = activeSessionId()
-  if (!sessionId) {
-    probeResult.value = '拿不到会话 id：先在电脑端打开一条会话，或回任务列表点一次。'
-    return
-  }
-  probeResult.value = `v4/conversation/rowsRange(${sessionId}) …`
-  try {
-    const response = await readRowsViaPlatform(endpointId.value, sessionId, { limit: 20 })
-    probeResult.value = `v4/conversation/rowsRange → ${JSON.stringify(response).slice(0, 1500)}`
-  } catch (error) {
-    probeResult.value = `v4/conversation/rowsRange → 失败：${error?.message ?? error}`
   }
 }
 
